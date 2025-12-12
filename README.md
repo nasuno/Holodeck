@@ -36,10 +36,10 @@ https://github.com/nasuno/Holodeck/blob/main/CommandHelper/auto_include.ms
 &nbsp;&nbsp;**Resource packs** (recomended)<br>
 https://github.com/nasuno/Holodeck/tree/main/resourcepacks<br>
 &nbsp;&nbsp;**Pre Minecraft 1.21.6:**<br>
-Holo_Wool-Glowstone<br>
+`Holo_Wool-Glowstone`<br>
 &nbsp;&nbsp;**Post Minecraft 1.21.6:**<br>
-Holo_Wool-Glowstone<br>
-no-fog-without-optifine-1-21-6-e1750
+`Holo_Wool-Glowstone`<br>
+`no-fog-without-optifine-1-21-6-e1750`
 
 
 
