@@ -142,8 +142,8 @@ proc _splitToBlackAndWhite(@theString) {
     }
 
     # Color mapping, index matches color order
-    _colorblocks(@segments[0],  'glowstone')       # Black
-    _colorblocks(@segments[1],  'black_wool')        # White
+    _colorblocks(@segments[0],  'glowstone')       # Black    I swapped these
+    _colorblocks(@segments[1],  'black_wool')        # White  for a white background
     _colorblocks(@segments[2],  'yellow_wool')      # Yellow
     _colorblocks(@segments[3],  'white_wool')       # WhiteDim
     _colorblocks(@segments[4],  'light_gray_wool')  # GreyLight
@@ -260,5 +260,6 @@ proc _place_cube_planes() {
         }
     }
 }
+
 
 
