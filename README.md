@@ -1,5 +1,5 @@
 
-## Installation
+**Installation**
 
 &nbsp;&nbsp;**Prerequisites**:<br>
 CommandHelper/MethodScript<br>
