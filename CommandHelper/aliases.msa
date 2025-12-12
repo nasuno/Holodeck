@@ -1,0 +1,16 @@
+
+
+*:/go = >>>
+    _exampleI()
+<<<
+
+*:/frame = >>>		# Don't expect much from the first frame as frame 1 is a generic pregenerated frame.
+	_single_frame() # as the server has not had the opportunity, until the first frame request, 
+<<<					# to pregenerate frames with a last known observer coordinate.
+
+
+*:/cube = >>>
+	_place_cube_planes()
+<<<
+
+
