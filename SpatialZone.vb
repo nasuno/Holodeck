@@ -565,7 +565,7 @@ Public Class SpatialZone
         bottomRightCorner = (bottomRowIndex, rightColumnIndex)
         'Console.WriteLine($"TopLeft: {topLeftCorner}, BottomLeft: {bottomLeftCorner}, TopRight: {topRightCorner}, BottomRight: {bottomRightCorner}")
 
-        ' --- First refactoring: get the panel‐grid once for all corner lookups ---
+        ' --- Get the panel‐grid once for all corner lookups ---
         Dim grid = GetPanelGrid()
         topLeftCornerCartesian = grid(topLeftCorner)
         topRightCornerCartesian = grid(topRightCorner)
@@ -1005,4 +1005,5 @@ End Class ' maybe have spatial zone after map and object, update this info in a 
 ' For Each seg In zone.FontSegmenter.AllSegments()    ' Enumerate all 5x7 segments in the zone
 '     ' seg.StartRow, seg.StartCol, seg.EndRow, seg.EndCol define the bounds of the segment
 '     ' zone.FontSegmenter.GetSurroundingStrips(seg, ...) gives the gutter cells around it
+
 ' Nex
