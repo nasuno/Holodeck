@@ -78,7 +78,7 @@ Place your compiled plugin assembly (`.dll` file) in the `plugins/` directory lo
 ```
 ApplicationDirectory/
 ├── Application.exe
-├── commands. ini
+├── commands.ini
 └── plugins/
     ├── MyPlugin.dll
     └── AnotherPlugin.dll
