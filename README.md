@@ -6,6 +6,7 @@ CommandHelper/MethodScript<br>
 https://methodscript.com/docs/3.3.5//Download.html<br>
 build (Recommended)
 
+```
 mkdir mc<br>
 mc/buildtools.exe<br>
 java -jar spigot.jar<br>
@@ -13,6 +14,7 @@ java -jar spigot.jar<br>
 mc/plugins/commandhelper-(Recommended).jar<br>
 java -jar spigot.jar<br>
 /stop
+```
 
 &nbsp;&nbsp;**Add these commands to `aliases.msa`**:<br>
 mc/plugins/CommandHelper/aliases.msa<br>
