@@ -172,12 +172,12 @@ Plugin Name
 
 ### Example
 
-To trigger the `My Plugin` plugin with the command `zone test`:
+To trigger the `My Plugin` plugin with the command `plugin test`:
 
 ```ini
 [Commands]
 plugin test
-Spatial Zone Mouse Test
+My Plugin
 ```
 
 When a player types `plugin test` in Minecraft, the host executes the plugin named `My Plugin`.
