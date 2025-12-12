@@ -23,14 +23,14 @@ https://github.com/nasuno/Holodeck/blob/main/CommandHelper/aliases.msa
 
 &nbsp;&nbsp;**Add this to `main.ms`**:<br>
 mc/plugins/CommandHelper/main.ms<br>
-Two locations where "# Change me" occurs (without quotes), substitute username with your own.<br>
+&nbsp;Two locations where "# Change me" occurs (without quotes), substitute username with your own.<br>
 https://github.com/nasuno/Holodeck/blob/main/CommandHelper/main.ms<br>
 You don't need **bind(block_place** but I can't live without it.
 
 
 &nbsp;&nbsp;**And finally `auto_include.ms`**:<br>
 mc/plugins/CommandHelper/auto_include.ms<br>
-One location where "# Change me" occurs, substitute username with your own.<br>
+&nbsp;One location where "# Change me" occurs, substitute username with your own.<br>
 https://github.com/nasuno/Holodeck/blob/main/CommandHelper/auto_include.ms
 
 &nbsp;&nbsp;**Resource packs** (recomended)<br>
