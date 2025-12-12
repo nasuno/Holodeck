@@ -1,7 +1,7 @@
 
-Installation
+**Installation**
 
-&nbsp;&nbsp;Prerequisites:<br>
+&nbsp;&nbsp;**Prerequisites**:<br>
 CommandHelper/MethodScript<br>
 https://methodscript.com/docs/3.3.5//Download.html<br>
 build (Recommended)
@@ -14,28 +14,28 @@ mc/plugins/commandhelper-(Recommended).jar<br>
 java -jar spigot.jar<br>
 /stop
 
-&nbsp;&nbsp;Add these commands to `aliases.msa`:<br>
+&nbsp;&nbsp;**Add these commands to `aliases.msa`**:<br>
 mc/plugins/CommandHelper/aliases.msa<br>
 https://github.com/nasuno/Holodeck/blob/main/CommandHelper/aliases.msa
 
 
-&nbsp;&nbsp;Add this to `main.ms`:<br>
+&nbsp;&nbsp;**Add this to `main.ms`**:<br>
 mc/plugins/CommandHelper/main.ms<br>
 Two locations where "# Change me" occurs (without quotes), substitute username with your own.<br>
 https://github.com/nasuno/Holodeck/blob/main/CommandHelper/main.ms<br>
 You don't need bind(block_place but I can't live without it.
 
 
-&nbsp;&nbsp;And finally `auto_include.ms`:<br>
+&nbsp;&nbsp;**And finally `auto_include.ms`**:<br>
 mc/plugins/CommandHelper/auto_include.ms<br>
 One location where "# Change me" occurs (without quotes), substitute username with your own.<br>
 https://github.com/nasuno/Holodeck/blob/main/CommandHelper/auto_include.ms
 
-&nbsp;&nbsp;Resource packs (recomended)<br>
+&nbsp;&nbsp;**Resource packs** (recomended)<br>
 https://github.com/nasuno/Holodeck/tree/main/resourcepacks<br>
-&nbsp;&nbsp;'Pre Minecraft 1.21.6:'<br>
+&nbsp;&nbsp;**Pre Minecraft 1.21.6:**<br>
 Holo_Wool-Glowstone<br>
-&nbsp;&nbsp;'Post Minecraft 1.21.6:'<br>
+&nbsp;&nbsp;**Post Minecraft 1.21.6:**<br>
 Holo_Wool-Glowstone<br>
 no-fog-without-optifine-1-21-6-e1750
 
