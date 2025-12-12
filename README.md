@@ -96,7 +96,7 @@ Imports Current.PluginApi
 
 ### 2. Add the Metadata Attribute
 
-Every plugin requires the `PluginMetadata` attribute placed above the class declaration:
+Every plugin requires the `PluginMetadata` attribute:
 
 ```vb
 <PluginMetadata("My Plugin", "1.0", "Author", "Description of what the plugin does.")>
