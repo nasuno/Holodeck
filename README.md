@@ -25,7 +25,7 @@ https://github.com/nasuno/Holodeck/blob/main/CommandHelper/aliases.msa
 mc/plugins/CommandHelper/main.ms<br>
 Two locations where "# Change me" occurs (without quotes), substitute username with your own.<br>
 https://github.com/nasuno/Holodeck/blob/main/CommandHelper/main.ms<br>
-You don't need bind(block_place but I can't live without it.
+You don't need **bind(block_place** but I can't live without it.
 
 
 &nbsp;&nbsp;**And finally `auto_include.ms`**:<br>
