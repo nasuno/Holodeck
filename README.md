@@ -1,194 +1,130 @@
-How To Create a Plugin
-Step 1: Create Your Plugin Class File
 
-Create a new VB.NET class file in your project. The filename can be anything, but should reflect your plugin's purpose (e.g., MyAwesomePlugin.vb).
-Step 2: Add the Required Import
+## First Run
 
-At the top of your file, import the plugin API namespace:
-vb
+On first launch, if the application does not find the required resources, it creates them and exits with a setup message: 
 
+ Resource           |  Location      | Description 
+--------------------|----------------|-------------
+ Configuration file | `commands.ini` | Command mappings and settings 
+ Plugins directory  | `plugins/`     | Location for plugin assemblies 
+
+Both are created in the application's base directory. 
+
+After first run:
+
+1. Edit `commands.ini` to configure command mappings and settings
+2. Place your compiled plugin `.dll` files in the `plugins/` directory
+3. Restart the application
+
+---
+
+## Plugin Location
+
+Place your compiled plugin assembly (`.dll` file) in the `plugins/` directory located in the application's base directory: 
+
+```
+ApplicationDirectory/
+├── Application.exe
+├── commands. ini
+└── plugins/
+    ├── MyPlugin.dll
+    └── AnotherPlugin.dll
+```
+
+## Writing a Plugin
+
+### 1. Create the Class File
+
+Create a new VB.NET class library project.  Import the plugin API namespace:
+
+```vb
 Imports Current.PluginApi
+```
 
-This gives you access to IPlugin, ICurrentApi, and PluginMetadataAttribute.
-Step 3: Add the Metadata Attribute
+### 2. Add the Metadata Attribute
 
-Decorate your class with the PluginMetadata attribute:
-vb
+Every plugin requires the `PluginMetadata` attribute placed above the class declaration:
 
-<PluginMetadata("My Awesome Plugin", "1.0", "YourName", "Does something awesome.")>
-Public Class MyAwesomePlugin
+```vb
+<PluginMetadata("My Plugin", "1.0", "Author", "Description of what the plugin does.")>
+Public Class MyPlugin
+```
 
-Important: The first parameter (name) is how the host identifies your plugin. You will use this exact string in the INI file to trigger execution. Spelling and capitalization must match exactly.
-Metadata Parameters
-Parameter	What to Write
-name	A unique, descriptive name. This is your plugin's identity.
-version	Your versioning scheme (e.g., "1.0", "2.1.3").
-author	Your name or handle.
-description	A sentence explaining what the plugin does.
-Step 4: Implement the IPlugin Interface
+  Parameter    | Type   | Description 
+---------------|--------|-------------
+ `name`        | String | Unique plugin name.  Used for command mapping.  Case-sensitive. 
+ `version`     | String | Version identifier 
+ `author`      | String | Plugin author 
+ `description` | String | Brief summary of functionality 
 
-Your class must implement IPlugin, which requires a single method:
-vb
+### 3. Implement IPlugin
 
-Public Class MyAwesomePlugin
-    Implements IPlugin
+Your class must implement the `IPlugin` interface:
 
-    Public Sub Execute(api As ICurrentApi) Implements IPlugin.Execute
-        ' Your code runs here
-    End Sub
-End Class
-
-The host calls Execute when your mapped command is received. The api parameter is your gateway to all host functionality.
-Step 5: Store the API Reference
-
-If your plugin does anything beyond a single immediate action—background threads, event handlers, helper methods—store the API reference in a field:
-vb
-
-Private _api As ICurrentApi
-
-Public Sub Execute(api As ICurrentApi) Implements IPlugin.Execute
-    _api = api
-
-    ' Now _api is available throughout your class
-End Sub
-
-Why this matters: The api parameter only exists within the Execute method scope. If you spawn a thread or register a callback, those will not have access to api unless you store it first.
-Step 6: Register Your Command in the INI File
-
-Open your application's INI file and locate the [Commands] section. Add two lines:
-INI
-
-[Commands]
-your command here
-My Awesome Plugin
-
-    Line 1: The command string the host will receive from Minecraft.
-    Line 2: Your plugin's name from the metadata attribute. Must match exactly.
-
-Example Mappings
-INI
-
-[Commands]
-spawn particles
-Particle Spawner Plugin
-
-toggle overlay
-Debug Overlay
-
-reset world
-World Reset Tool
-
-Each pair maps one command to one plugin.
-Complete Example
-The Plugin File
-vb
-
-Imports Current.PluginApi
-
-<PluginMetadata("Hello World Plugin", "1.0", "DevName", "Prints a greeting when triggered.")>
-Public Class HelloWorldPlugin
+```vb
     Implements IPlugin
 
     Private _api As ICurrentApi
 
-    Public Sub Execute(api As ICurrentApi) Implements IPlugin. Execute
+    Public Sub Execute(api As ICurrentApi) Implements IPlugin.Execute
         _api = api
 
-        Console.WriteLine("Hello from the plugin!")
+        ' Some plugin logic
     End Sub
 End Class
+```
 
-The INI Entry
-INI
+### 4. Complete Example
 
+```vb
+Imports Current.PluginApi
+
+<PluginMetadata("My Plugin", "1.0", "Author", "Description of what the plugin does.")>
+Public Class MyPlugin
+    Implements IPlugin
+
+    Private _api As ICurrentApi
+
+    Public Sub Execute(api As ICurrentApi) Implements IPlugin.Execute
+        _api = api
+
+        ' Some plugin logic
+    End Sub
+End Class
+```
+
+### 5. Build and Deploy
+
+1. Build your class library project to produce a `.dll` file
+2. Copy the `.dll` to the `plugins/` directory
+3. Restart the host application
+
+---
+
+## Registering a Command
+
+Plugins are triggered by commands defined in the `[Commands]` section of `commands.ini`.
+
+### Format
+
+Each command mapping consists of two consecutive lines:
+
+```ini
+command string
+Plugin Name
+```
+
+- **Line 1:** The command string as received from Minecraft
+- **Line 2:** The plugin name (must match `PluginMetadata.Name` exactly)
+
+### Example
+
+To trigger the `My Plugin` plugin with the command `zone test`:
+
+```ini
 [Commands]
-say hello
-Hello World Plugin
+plugin test
+Spatial Zone Mouse Test
+```
 
-What Happens
-
-    User sends say hello from Minecraft.
-    Host receives the command and looks it up in [Commands].
-    Host finds Hello World Plugin and locates the class with matching PluginMetadata. Name.
-    Host calls Execute(api) on that class.
-    Console prints Hello from the plugin!.
-
-Addendum
-A. Built-in Commands
-
-The host reserves certain keywords for internal functions. Do not use these as plugin names:
-Keyword	Function
-_builtin_list_plugins	Lists all available plugins
-_builtin_list_margins	Lists all defined margins
-
-Example INI usage:
-INI
-
-[Commands]
-list plugins
-_builtin_list_plugins
-
-list margins
-_builtin_list_margins
-
-B. Plugin Execution Context
-
-When Execute is called:
-
-    It runs on a background thread (via RunPluginByNameOnThread).
-    The api object is shared; avoid blocking operations that could stall other systems.
-    Exceptions inside Execute should be handled gracefully to prevent crashes.
-
-C. Naming Considerations
-Do	Don't
-Use clear, unique names	Use generic names like "Plugin" or "Test"
-Include purpose in name	Rely on description alone for identification
-Keep consistent capitalization	Mix cases between metadata and INI
-D. Common Patterns
-
-Animation/Continuous Loop:
-vb
-
-Private _running As Boolean = False
-Private _thread As Thread
-
-Public Sub Execute(api As ICurrentApi) Implements IPlugin. Execute
-    _api = api
-
-    If _thread IsNot Nothing AndAlso _thread.IsAlive Then Return
-
-    _running = True
-    _thread = New Thread(AddressOf RunLoop)
-    _thread.IsBackground = True
-    _thread. Start()
-End Sub
-
-Private Sub RunLoop()
-    Do While _running
-        ' Per-frame logic here
-        Thread.Sleep(16)
-    Loop
-End Sub
-
-Public Sub StopPlugin()
-    _running = False
-End Sub
-
-One-Shot Action:
-vb
-
-Public Sub Execute(api As ICurrentApi) Implements IPlugin.Execute
-    _api = api
-    DoSomethingOnce()
-End Sub
-
-Private Sub DoSomethingOnce()
-    ' Immediate action, then done
-End Sub
-
-E. Troubleshooting
-Symptom	Likely Cause
-Command does nothing	Plugin name in INI doesn't match PluginMetadata.Name exactly
-Plugin not found	Class missing Implements IPlugin or PluginMetadata attribute
-api is Nothing in helper method	Forgot to store _api = api in Execute
-Plugin runs twice	No guard against re-entry (check if thread already running)
+When a player types `plugin test` in Minecraft, the host executes the plugin named `My Plugin`.
