@@ -547,11 +547,6 @@ Public Class Margins
     '    Dim info = marginMgr.GetMarginInfo("testmargin")
     '    Console.WriteLine(info)
 
-    ' NOTES:
-    ' - Default adjacency rules (e.g., "AdjacentAbove", "AdjacentBelow") must be configured
-    '   correctly in the PanelDataManager for relocation to work properly.
-    ' - The CreateMargin method automatically generates 3D representations for margins
-    '   using the BuildMargin3DLine method.
     '=================================================================================
 
 End Class

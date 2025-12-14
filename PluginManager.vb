@@ -4,6 +4,7 @@
 
 Imports System.Collections.Concurrent
 Imports System.Collections.Immutable
+Imports System.IO
 Imports System.Reflection
 Imports System.Threading
 Imports Current.PluginApi
@@ -49,6 +50,18 @@ Public Class CurrentApiImpl
                                 endX As Integer, endY As Integer, endZ As Integer) As List(Of (Integer, Integer, Integer)) Implements ICurrentApi.Bresenham3D
         Return Module1.Bresenham3D(startX, startY, startZ, endX, endY, endZ)
     End Function
+
+    Public Sub ThinEvenSpatiallyAdaptiveAuto(
+        ByRef sourceDict As ConcurrentDictionary(Of Integer, MyObject),
+        ByRef destDict As ConcurrentDictionary(Of Integer, MyObject),
+        numToLeave As Integer,
+        observer As (Integer, Integer, Integer),
+        keepRadius As Double,
+        Optional numBands As Integer = 10,
+        Optional closeBiasExponent As Double = 1.5
+    ) Implements ICurrentApi.ThinEvenSpatiallyAdaptiveAuto
+        Module1.ThinEvenSpatiallyAdaptiveAuto(sourceDict, destDict, numToLeave, observer, keepRadius, numBands, closeBiasExponent)
+    End Sub
 
     ' === TRIANGLE CONTROL ===
     Public Sub RemoveAllTrianglesInSet(setId As Integer) Implements ICurrentApi.RemoveAllTrianglesInSet
@@ -294,7 +307,7 @@ End Class
 ' ===============  SPATIAL ZONE ADAPTER  ================
 ' =======================================================
 
-' Adapts a SpatialZone for plugin-safe API access (exposes only ISpatialZone methods/properties)
+' Adapts a SpatialZone for plugin- API access (exposes only ISpatialZone methods/properties)
 Public Class SpatialZoneAdapter
     Implements ISpatialZone
 
@@ -376,7 +389,7 @@ Public Class SpatialZoneAdapter
         End Get
     End Property
 
-    ' ──────────────── NEW ────────────────
+    ' ──────────────── NEW ──────────────── *** DO NOT USE ***
     Public Sub InvertColorsOn() Implements ISpatialZone.InvertColorsOn
         _zone.InvertColorsOn()
     End Sub
@@ -492,6 +505,382 @@ Public Class PluginManager
 
 End Class
 
-' =======================================================
-' ===================  END OF FILE  =====================
-' =======================================================
+
+
+
+
+
+
+
+Public Module IniManager
+    ' ============================================================================
+    ' HOW TO ADD A NEW INI SECTION: 
+    ' 
+    ' 1. Add your section's default content to GetDefaultIniContent()
+    ' 2. If your section uses key=value pairs, use GetSectionInt() or GetSectionString()
+    ' 3. If your section needs special parsing (like Commands), add a loader below
+    '    and call it from InitializeSectionLoaders()
+    ' ============================================================================
+
+    Private ReadOnly SectionData As New Dictionary(Of String, List(Of String))(StringComparer.OrdinalIgnoreCase)
+    Private IsInitialized As Boolean = False
+    Private Const IniFileName As String = "commands.ini"
+    Private Const PluginsFolderName As String = "plugins"
+
+    ' ----------------------------------------------------------------------------
+    ' SECTION-SPECIFIC STORAGE
+    ' Add new dictionaries or variables here for sections that need special parsing
+    ' ----------------------------------------------------------------------------
+    Private ReadOnly CommandMap As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+
+    ' ----------------------------------------------------------------------------
+    ' DEFAULT INI CONTENT
+    ' Add new sections here - this defines what gets written when INI is created
+    ' ----------------------------------------------------------------------------
+    Private Function GetDefaultIniContent() As String()
+        Return {
+            "[Commands]",
+            "; Command to plugin mappings",
+            "; Two lines per mapping:",
+            ";   1) command string as received by the host",
+            ";   2) plugin name (must match PluginMetadata.Name)",
+            "",
+            "; Dev:  event subsystem & helpers",
+            "events",
+            "Event Aggregator",
+            "",
+            "; Dev: menu subsystem plugin",
+            "menu system",
+            "Menu System",
+            "",
+            "; Dev:  test of menu subsystem",
+            "test menu",
+            "Menu System Consumer",
+            "",
+            "; Built-in: list all plugins",
+            "list plugins",
+            "_builtin_list_plugins",
+            "",
+            "; Built-in: list margins",
+            "list margins",
+            "_builtin_list_margins",
+            "",
+            "run cube",
+            "_builtin_run_cube",
+            "",
+            "[CubeCenter]",
+            "; Cube center coordinates - EDIT THESE VALUES",
+            "CenterX=-250",
+            "CenterY=73",
+            "CenterZ=-78",
+            "",
+            "[Tuning]",
+            "; Adjustable runtime parameters",
+            "RequiredStationaryFrames=5",
+            "ScoreDecayPerFrame=1",
+            "ScoreBumpOnBlock=8",
+            "",
+            "[predefined margin sets]",
+            "; Your margin sets here",
+            ""
+        }
+    End Function
+
+    ' ----------------------------------------------------------------------------
+    ' SECTION LOADERS
+    ' Add new loader methods here for sections that need special parsing
+    ' Then register them in InitializeSectionLoaders()
+    ' ----------------------------------------------------------------------------
+    Private Sub InitializeSectionLoaders()
+        LoadCommandsSection()
+        ' ADD NEW SECTION LOADERS HERE: 
+        ' LoadMarginSetsSection()
+        ' LoadWhateverSection()
+    End Sub
+
+    Private Sub LoadCommandsSection()
+        Dim lines As List(Of String) = Nothing
+        If Not SectionData.TryGetValue("Commands", lines) Then Return
+
+        Dim pendingCommand As String = Nothing
+
+        For Each raw In lines
+            Dim line = raw.Trim()
+
+            If IsCommentOrBlank(line) Then Continue For
+
+            If pendingCommand Is Nothing Then
+                pendingCommand = raw.TrimEnd(vbCr, vbLf)
+            Else
+                Dim target = raw.TrimEnd(vbCr, vbLf)
+                If pendingCommand.Length > 0 Then
+                    CommandMap(pendingCommand) = target
+                End If
+                pendingCommand = Nothing
+            End If
+        Next
+    End Sub
+
+    ' ----------------------------------------------------------------------------
+    ' PUBLIC ACCESSORS
+    ' Add new public functions here for accessing section data
+    ' ----------------------------------------------------------------------------
+
+    ' Use for any section with key=value integer pairs
+    Public Function GetSectionInt(sectionName As String, key As String, defaultValue As Integer) As Integer
+        EnsureInitialized()
+        Dim lines As List(Of String) = Nothing
+        If Not SectionData.TryGetValue(sectionName, lines) Then Return defaultValue
+
+        Dim lowerKey = key.ToLower()
+        For Each raw In lines
+            Dim line = raw.Trim()
+            If IsCommentOrBlank(line) Then Continue For
+
+            Dim eqIndex = line.IndexOf("="c)
+            If eqIndex > 0 Then
+                Dim k = line.Substring(0, eqIndex).Trim().ToLower()
+                Dim v = line.Substring(eqIndex + 1).Trim()
+                If k = lowerKey Then
+                    Dim result As Integer
+                    If Integer.TryParse(v, result) Then Return result
+                End If
+            End If
+        Next
+        Return defaultValue
+    End Function
+
+    ' Use for any section with key=value string pairs
+    Public Function GetSectionString(sectionName As String, key As String, defaultValue As String) As String
+        EnsureInitialized()
+        Dim lines As List(Of String) = Nothing
+        If Not SectionData.TryGetValue(sectionName, lines) Then Return defaultValue
+
+        Dim lowerKey = key.ToLower()
+        For Each raw In lines
+            Dim line = raw.Trim()
+            If IsCommentOrBlank(line) Then Continue For
+
+            Dim eqIndex = line.IndexOf("="c)
+            If eqIndex > 0 Then
+                Dim k = line.Substring(0, eqIndex).Trim().ToLower()
+                Dim v = line.Substring(eqIndex + 1).Trim()
+                If k = lowerKey Then Return v
+            End If
+        Next
+        Return defaultValue
+    End Function
+
+    ' Use for Commands section lookups
+    Public Function TryGetPluginForCommand(command As String, ByRef pluginName As String) As Boolean
+        EnsureInitialized()
+        If String.IsNullOrEmpty(command) Then
+            pluginName = Nothing
+            Return False
+        End If
+        Return CommandMap.TryGetValue(command, pluginName)
+    End Function
+
+    ' Use to get raw lines from any section (for custom parsing)
+    Public Function GetSectionLines(sectionName As String) As List(Of String)
+        EnsureInitialized()
+        Dim lines As List(Of String) = Nothing
+        If SectionData.TryGetValue(sectionName, lines) Then
+            Return New List(Of String)(lines)
+        End If
+        Return New List(Of String)()
+    End Function
+
+    ' ----------------------------------------------------------------------------
+    ' CORE INFRASTRUCTURE
+    ' You probably don't need to modify anything below this line
+    ' ----------------------------------------------------------------------------
+    Private Function IsCommentOrBlank(line As String) As Boolean
+        Return line = "" OrElse line.StartsWith(";") OrElse line.StartsWith("#")
+    End Function
+
+    Private Sub EnsureInitialized()
+        If IsInitialized Then Return
+
+        Dim baseDir As String = AppContext.BaseDirectory
+        Dim iniPath = Path.Combine(baseDir, IniFileName)
+        Dim pluginsPath = Path.Combine(baseDir, PluginsFolderName)
+
+        ' Track what needs to be created
+        Dim iniCreated As Boolean = False
+        Dim pluginsDirCreated As Boolean = False
+
+        ' Create INI file if it doesn't exist
+        If Not File.Exists(iniPath) Then
+            iniCreated = CreateDefaultIni(iniPath)
+        End If
+
+        ' Create plugins directory if it doesn't exist
+        If Not Directory.Exists(pluginsPath) Then
+            pluginsDirCreated = CreatePluginsDirectory(pluginsPath)
+        End If
+
+        ' If either was created, exit with appropriate message
+        If iniCreated OrElse pluginsDirCreated Then
+            ExitWithSetupMessage(iniCreated, pluginsDirCreated, iniPath, pluginsPath)
+        End If
+
+        ParseAllSections(iniPath)
+        InitializeSectionLoaders()
+        IsInitialized = True
+    End Sub
+
+    Private Function CreateDefaultIni(path As String) As Boolean
+        Dim lines = GetDefaultIniContent()
+
+        Try
+            File.WriteAllLines(path, lines)
+
+            ' Verify the file now exists (sanity check)
+            If Not File.Exists(path) Then
+                Console.WriteLine("ERROR: Failed to create INI file - file does not exist after write attempt.")
+                Console.WriteLine($"       Attempted path: {path}")
+                Environment.Exit(1)
+            End If
+
+            ' Success - file was created
+            Return True
+
+        Catch ex As UnauthorizedAccessException
+            Console.WriteLine("ERROR: Permission denied while creating INI file.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(2)
+        Catch ex As DirectoryNotFoundException
+            Console.WriteLine("ERROR: Directory not found while creating INI file.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(3)
+        Catch ex As IOException
+            Console.WriteLine("ERROR: I/O error while creating INI file.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(4)
+        Catch ex As Exception
+            Console.WriteLine("ERROR: Unexpected error while creating INI file.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(5)
+        End Try
+
+        Return False ' Won't reach here due to Environment.Exit, but needed for compiler
+    End Function
+
+    Private Function CreatePluginsDirectory(path As String) As Boolean
+        Try
+            Directory.CreateDirectory(path)
+
+            ' Verify the directory now exists (sanity check)
+            If Not Directory.Exists(path) Then
+                Console.WriteLine("ERROR: Failed to create plugins directory - directory does not exist after creation attempt.")
+                Console.WriteLine($"       Attempted path: {path}")
+                Environment.Exit(6)
+            End If
+
+            ' Success - directory was created
+            Return True
+
+        Catch ex As UnauthorizedAccessException
+            Console.WriteLine("ERROR: Permission denied while creating plugins directory.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(7)
+        Catch ex As PathTooLongException
+            Console.WriteLine("ERROR: Path too long while creating plugins directory.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(8)
+        Catch ex As IOException
+            Console.WriteLine("ERROR:  I/O error while creating plugins directory.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(9)
+        Catch ex As Exception
+            Console.WriteLine("ERROR: Unexpected error while creating plugins directory.")
+            Console.WriteLine($"       Path: {path}")
+            Console.WriteLine($"       Details: {ex.Message}")
+            Environment.Exit(10)
+        End Try
+
+        Return False ' Won't reach here due to Environment.Exit, but needed for compiler
+    End Function
+
+    Private Sub ExitWithSetupMessage(iniCreated As Boolean, pluginsDirCreated As Boolean, iniPath As String, pluginsPath As String)
+        Console.WriteLine()
+        Console.WriteLine("================================================================================")
+        Console.WriteLine("                        FIRST-RUN SETUP COMPLETED")
+        Console.WriteLine("================================================================================")
+        Console.WriteLine()
+
+        If iniCreated AndAlso pluginsDirCreated Then
+            Console.WriteLine("The following required resources were missing and have been created:")
+            Console.WriteLine()
+            Console.WriteLine($"  1. Configuration file: {iniPath}")
+            Console.WriteLine($"  2. Plugins directory:  {pluginsPath}")
+            Console.WriteLine()
+            Console.WriteLine("WHY IS THE APPLICATION EXITING?")
+            Console.WriteLine("  Both the configuration file and plugins directory were just created.")
+            Console.WriteLine("  The application cannot run without configured commands and plugins.")
+            Console.WriteLine()
+            Console.WriteLine("NEXT STEPS:")
+            Console.WriteLine("  1. Edit the configuration file to customize command mappings and settings")
+            Console.WriteLine("  2. Place your plugin assemblies (. dll files) in the plugins directory")
+            Console.WriteLine("  3. Restart the application")
+        ElseIf iniCreated Then
+            Console.WriteLine("The configuration file was missing and has been created:")
+            Console.WriteLine()
+            Console.WriteLine($"  Configuration file: {iniPath}")
+            Console.WriteLine()
+            Console.WriteLine("WHY IS THE APPLICATION EXITING? ")
+            Console.WriteLine("  A default configuration file was just created.")
+            Console.WriteLine("  You should review and customize it before the application runs.")
+            Console.WriteLine()
+            Console.WriteLine("NEXT STEPS:")
+            Console.WriteLine("  1. Edit the configuration file to customize command mappings and settings")
+            Console.WriteLine("  2. Restart the application")
+        ElseIf pluginsDirCreated Then
+            Console.WriteLine("The plugins directory was missing and has been created:")
+            Console.WriteLine()
+            Console.WriteLine($"  Plugins directory: {pluginsPath}")
+            Console.WriteLine()
+            Console.WriteLine("WHY IS THE APPLICATION EXITING?")
+            Console.WriteLine("  The plugins directory was just created and is currently empty.")
+            Console.WriteLine("  The application requires plugins to provide functionality.")
+            Console.WriteLine()
+            Console.WriteLine("NEXT STEPS:")
+            Console.WriteLine("  1. Place your plugin assemblies (.dll files) in the plugins directory")
+            Console.WriteLine("  2. Restart the application")
+        End If
+
+        Console.WriteLine()
+        Console.WriteLine("================================================================================")
+        Console.WriteLine()
+
+        Environment.Exit(0)
+    End Sub
+
+    Private Sub ParseAllSections(iniPath As String)
+        Dim currentSection As String = Nothing
+        Dim currentLines As List(Of String) = Nothing
+
+        For Each raw In File.ReadAllLines(iniPath)
+            Dim line = raw.Trim()
+
+            If line.StartsWith("[") AndAlso line.EndsWith("]") Then
+                currentSection = line.Substring(1, line.Length - 2).Trim()
+                currentLines = New List(Of String)()
+                SectionData(currentSection) = currentLines
+                Continue For
+            End If
+
+            If currentLines IsNot Nothing Then
+                currentLines.Add(raw)
+            End If
+        Next
+    End Sub
+End Module

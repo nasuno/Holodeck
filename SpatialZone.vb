@@ -218,8 +218,6 @@ Public Class SpatialZone
 
     Public panelCommon As PanelType ' The panel this zone is mapped to (must be the same for all 4 margins)
 
-    'Private marginMgr As Margins.MarginManager ' CAN I COMMENT THIS?
-
     Private collisionTriangleSetId As Integer = 0
     Private topLeftCornerCartesian As (Integer, Integer, Integer)
     Private topRightCornerCartesian As (Integer, Integer, Integer)
@@ -273,7 +271,7 @@ Public Class SpatialZone
     Private topRowMarginId As String
     Private bottomRowMarginId As String
     Public Sub UpdateMargins(leftId As String, rightId As String, topId As String, bottomId As String)
-        RemoveAllZoneObjects() '* instead use DisposeZone()
+        RemoveAllZoneObjects() '* instead use DisposeZone()   *** WIP
         leftColumnMarginId = leftId
         rightColumnMarginId = rightId
         topRowMarginId = topId
@@ -411,7 +409,7 @@ Public Class SpatialZone
 
         ' Use your segment grid as limits
         Dim segCols As Integer = FontSegmenter.SegmentColumns ' see comment above. we are not making new so how to FS?
-        Dim segRows As Integer = FontSegmenter.SegmentRows    ' ** FS could also just give a window an extra pixel per side.
+        Dim segRows As Integer = FontSegmenter.SegmentRows    ' ** FS could also just give a window an extra pixel per side.  (this is done)
 
         WrappedTextQueue = WordWrapToRowLimitedQueue(
         inputLines,      ' ^^ use WordWrapToQueue if you want all lines from input text
@@ -565,7 +563,7 @@ Public Class SpatialZone
         bottomRightCorner = (bottomRowIndex, rightColumnIndex)
         'Console.WriteLine($"TopLeft: {topLeftCorner}, BottomLeft: {bottomLeftCorner}, TopRight: {topRightCorner}, BottomRight: {bottomRightCorner}")
 
-        ' --- Get the panel‐grid once for all corner lookups ---
+        ' --- First refactoring: get the panel‐grid once for all corner lookups ---
         Dim grid = GetPanelGrid()
         topLeftCornerCartesian = grid(topLeftCorner)
         topRightCornerCartesian = grid(topRightCorner)
@@ -587,7 +585,7 @@ Public Class SpatialZone
             borderLeftPoints, borderRightPoints, borderTopPoints, borderBottomPoints
         }
 
-        ' --- Second refactoring: reuse the same grid for all border points ---
+        ' --- Reuse the same grid for all border points ---
         For Each border In borderLists
             For Each pt In border
                 Dim xyz = grid(pt)
@@ -618,7 +616,7 @@ Public Class SpatialZone
             'AddAllGuttersToFactory()
             SendFontObjectsToFactory()
         Else
-            Console.WriteLine("Zone too small for font segment and gutters; only drawing border.") 'what if we are *fullscreen mode*?
+            Console.WriteLine("Zone too small for font segment and gutters; only drawing border.") 'what if we are *fullscreen mode*?   (Done)
         End If
 
         SendBorderObjectsToFactory()
@@ -633,7 +631,7 @@ Public Class SpatialZone
         Return ((xs.Min, ys.Min, zs.Min), (xs.Max, ys.Max, zs.Max))
     End Function
 
-    Private Sub AddAllGuttersToFactory()
+    Private Sub AddAllGuttersToFactory()      ' try not to do this. increases per-frame processing by alot (potentialy).
         ' Loop through all 5x7 segments within this zone
         Dim grid As Dictionary(Of (Integer, Integer), (Integer, Integer, Integer)) = GetPanelGrid()
 
@@ -1005,5 +1003,4 @@ End Class ' maybe have spatial zone after map and object, update this info in a 
 ' For Each seg In zone.FontSegmenter.AllSegments()    ' Enumerate all 5x7 segments in the zone
 '     ' seg.StartRow, seg.StartCol, seg.EndRow, seg.EndCol define the bounds of the segment
 '     ' zone.FontSegmenter.GetSurroundingStrips(seg, ...) gives the gutter cells around it
-
 ' Nex

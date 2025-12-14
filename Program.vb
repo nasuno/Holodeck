@@ -3,11 +3,9 @@ Imports System.Collections.Immutable
 Imports System.IO
 Imports System.Net
 Imports System.Numerics
-Imports System.Runtime
 Imports System.Text
 Imports System.Text.Json
 Imports System.Threading
-Imports ConsoleApp1.Margins
 Imports Current.PluginApi ' Namespace from your DLL
 
 
@@ -30,7 +28,8 @@ End Structure
 Public Module Module1
 
 
-    Private requiredStationaryFrames As Integer = 5 ' <--- Set to whatever you like
+    Private requiredStationaryFrames As Integer = IniManager.GetSectionInt("Tuning", "RequiredStationaryFrames", 5)
+    'Private requiredStationaryFrames As Integer = 5 ' <--- Set to whatever you like
     Private stationaryFrameCount As Integer = 0
     Private lastInputCoordinates As (Integer, Integer, Integer) = (-250, 155, -78)
     Private lastRawInputCoordinates As (Integer, Integer, Integer) = (-250, 155, -78)
@@ -39,6 +38,7 @@ Public Module Module1
     Public observedLocation As String = "-370,73,-200"
 
     Public spatialZoneDict As New Dictionary(Of String, SpatialZone)
+
 
     Public panelData As New PanelDataManager
     Public marginMgr As New Margins.MarginManager()
@@ -61,8 +61,8 @@ Public Module Module1
     Private pregeneratedSortedSetIds As List(Of Integer) = Nothing
 
     ' Per-frame decay controls (no hard reset)
-    Private Const SCORE_DECAY_PER_FRAME As Integer = 1     ' how much to subtract each frame
-    Private Const SCORE_BUMP_ON_BLOCK As Integer = 8       ' how much to add when a set blocks
+    Private SCORE_BUMP_ON_BLOCK As Integer = IniManager.GetSectionInt("Tuning", "ScoreBumpOnBlock", 8)      ' how much to add when a set blocks
+    Private SCORE_DECAY_PER_FRAME As Integer = IniManager.GetSectionInt("Tuning", "ScoreDecayPerFrame", 1)  ' how much to subtract each frame
 
     ' Concurrent triangle data structures
     Public triangleGroups As New ConcurrentDictionary(Of Integer, ConcurrentBag(Of Integer))()
@@ -204,6 +204,8 @@ Public Module Module1
         CreateDefaultMarginSetsOnce()
 
 
+        'scattering()
+
 
         CreateGridLinesGrid(-250, 70, -78, 90210, 10, 10, 2000, 1000)
         Console.WriteLine("created grid lines")
@@ -213,12 +215,16 @@ Public Module Module1
         Console.WriteLine(objectDictionary.Count)
 
 
+        Console.WriteLine("pre-plugin 3D objects loaded")
         ' Create API implementation (for plugins to use)
+        'CommandConfig.InitializeCommands()
         Dim apiImpl As CurrentApiImpl = New CurrentApiImpl(marginMgr)
         Dim pluginManager As PluginManager = New PluginManager()
         pluginManager.LoadPlugins()
 
-        Console.WriteLine("3D objects loaded")
+
+
+
 
         'PruneDistantObjects()
 
@@ -399,11 +405,8 @@ Public Module Module1
     Public structureDrawState As New ConcurrentDictionary(Of Integer, Boolean)
     Private objectsIntersectionDict As New ConcurrentDictionary(Of Integer, IntersectionHistory)
 
-    ' At the module level (outside any method), add this field:
     Private previousFrameColorDict As New Dictionary(Of (Double, Double, Double), ObjectColor)()
     Public Sub ProcessData()
-        'GC.Collect()
-        'GC.WaitForPendingFinalizers()
 
         ' Detect observer settling
         If lastRawInputCoordinates.Equals(lastInputCoordinates) Then
@@ -435,7 +438,8 @@ Public Module Module1
 
 
         ' Render debug info about triangle sorting to console (HUD)
-        RenderTriangleSortDebugOverlay()
+        ' ########################################################################## RenderTriangleSortDebugOverlay()
+        'RenderTriangleSortDebugOverlay()
 
         SyncLock processingLock
             responseReady = True
@@ -928,16 +932,31 @@ Public Module Module1
         Return Math.Sqrt(dx * dx + dy * dy + dz * dz)
     End Function
 
-    ' Main entry with overflow protection and large-data safety
+
     Public Sub ThinEvenSpatiallyAdaptiveAuto(
-    ByRef sourceDict As ConcurrentDictionary(Of Integer, MyObject),
-    ByRef destDict As ConcurrentDictionary(Of Integer, MyObject),
-    numToLeave As Integer,
-    observer As (Integer, Integer, Integer),
-    keepRadius As Double,
-    Optional numBands As Integer = 10,
-    Optional closeBiasExponent As Double = 1.5
+    ByRef sourceDict As ConcurrentDictionary(Of Integer, MyObject), ' Original object collection to be thinned
+    ByRef destDict As ConcurrentDictionary(Of Integer, MyObject),   ' Storage for removed objects
+    numToLeave As Integer,                                          ' Target number of objects to retain
+    observer As (Integer, Integer, Integer),                        ' Reference point for distance calculations
+    keepRadius As Double,                                           ' Distance threshold for automatic preservation
+    Optional numBands As Integer = 10,                              ' Number of distance-based grouping bands
+    Optional closeBiasExponent As Double = 1.5                      ' Weighting factor for proximity-based selection
 )
+
+
+
+        'DumpThinEvenSpatiallyAdaptiveAutoSignatureRequirements(
+        '    sourceDict:=sourceDict,
+        '    destDict:=destDict,
+        '    numToLeave:=numToLeave,
+        '    observer:=observer,
+        '    keepRadius:=keepRadius,
+        '    numBands:=numBands,
+        '    closeBiasExponent:=closeBiasExponent
+        ')
+
+
+
         If sourceDict.Count <= numToLeave OrElse numToLeave <= 0 Then Exit Sub
 
         Dim keys() As Integer = sourceDict.Keys.ToArray()
@@ -1165,83 +1184,146 @@ Public Module Module1
 
 
 
+    Public Sub HandleMCCommand(apiImpl As ICurrentApi,
+                           pluginManager As PluginManager,
+                           marginMgr As Margins.MarginManager)
 
+        Dim pluginOrKeyword As String = Nothing
 
+        If Not IniManager.TryGetPluginForCommand(mccommand, pluginOrKeyword) Then
+            ' Unknown command; user hasn't defined it in [Commands]
+            Exit Sub
+        End If
 
-
-
-
-
-
-
-
-    'Sub HandleMCCommand(zone As SpatialZone, apiImpl As ICurrentApi, pluginManager As PluginManager, marginMgr As Margins.MarginManager)
-    Sub HandleMCCommand(apiImpl As ICurrentApi, pluginManager As PluginManager, marginMgr As Margins.MarginManager)
-        Select Case mccommand
-            Case "dummy data"
-                ' Do nothing
-                'Console.WriteLine(mccommand)
-            Case "list plugins"
+        Select Case pluginOrKeyword
+            Case "_builtin_list_plugins"
                 pluginManager.ListAvailablePlugins()
-            Case "events"
-                pluginManager.RunPluginByNameOnThread("Event Aggregator", apiImpl)
-                'pluginManager.RunAllPluginsOnThreads(apiImpl)
+                Exit Sub
 
-            Case "menu system"
-                pluginManager.RunPluginByNameOnThread("Menu System", apiImpl)
-            Case "test menu"
-                pluginManager.RunPluginByNameOnThread("Menu System Consumer", apiImpl)
-
-            Case "run cube"
-                pluginManager.RunPluginByNameOnThread("Satellite Cubes Plugin", apiImpl)
-
-                Thread.Sleep(500)
-                ' Example: Keep more up close, with a strong bias (1.5), 10 bands, keep all within 500 units
-                Console.WriteLine(objectDictionary.Count)
-                ThinEvenSpatiallyAdaptiveAuto(objectDictionary, thinnedDict, 35000, userCoordinates, 500, 20, 20)
-                Console.WriteLine(objectDictionary.Count)
-
-            Case "test mouseover"
-                pluginManager.RunPluginByNameOnThread("Spatial Zone Mouse Test", apiImpl)
-            Case "ships"
-                pluginManager.RunPluginByNameOnThread("Vector Fighter Fleet Plugin", apiImpl)
-
-            Case "list margins"
+            Case "_builtin_list_margins"
                 PrintAllMargins(marginMgr)
-                'Case "clearsz"
-                '    Console.WriteLine(mccommand)
-                '    zone.RemoveAllZoneObjects()
-                '    mccommand = "dummy data"
-                'Case "north set"
-                '    zone.SwapMargenSetNorth()
-                '    mccommand = "dummy data"
-                'Case "east set"
-                '    zone.SwapMargenSetEast()
-                '    mccommand = "dummy data"
-                'Case "south set"
-                '    zone.SwapMargenSetSouth()
-                '    mccommand = "dummy data"
-                'Case "west set"
-                '    zone.SwapMargenSetWest()
-                '    mccommand = "dummy data"
-                'Case "top set"
-                '    zone.SwapMargenSetTop()
-                '    mccommand = "dummy data"
-                'Case "bottom set"
-                '    zone.SwapMargenSetBottom()
-                '    mccommand = "dummy data"
-                'Case "move margin"
-                '    marginMgr.MarginJump("NorthSetRight", PanelType.NorthPanel, Nothing, 160)
-                '    zone.SwapMargenSetNorth()
-                '    mccommand = "dummy data"
-                'Case "move margin2"
-                '    marginMgr.MarginJump("NorthSetRight", PanelType.NorthPanel, Nothing, 100)
-                '    zone.SwapMargenSetNorth()
-                '    mccommand = "dummy data"
+                Exit Sub
+
+                'Case "_builtin_run_cube"
+                'pluginManager.RunPluginByNameOnThread("Satellite Cubes Plugin", apiImpl)
+
+                'Thread.Sleep(500)
+                'Console.WriteLine(objectDictionary.Count)
+                'ThinEvenSpatiallyAdaptiveAuto(objectDictionary, Nothing, 30000, userCoordinates, 200, 20, 1.5)
+                'Console.WriteLine(objectDictionary.Count)
+                'Console.WriteLine("ini builtin")
+
             Case Else
-                ' You can add more commands here in the future
+                ' Treat as plugin name (must match PluginMetadata.Name)
+                pluginManager.RunPluginByNameOnThread(pluginOrKeyword, apiImpl)
         End Select
     End Sub
+
+
+    'Public Sub HandleMCCommand_2_(apiImpl As ICurrentApi,
+    '                       pluginManager As PluginManager,
+    '                       marginMgr As Margins.MarginManager)
+
+    '    Dim pluginOrKeyword As String = Nothing
+
+    '    If Not CommandConfig.TryGetPluginForCommand(mccommand, pluginOrKeyword) Then
+    '        ' Unknown command; user hasn't defined it in [Commands]
+    '        Exit Sub
+    '    End If
+
+    '    Select Case pluginOrKeyword
+    '        Case "_builtin_list_plugins"
+    '            pluginManager.ListAvailablePlugins()
+    '            Exit Sub
+
+    '        Case "_builtin_list_margins"
+    '            PrintAllMargins(marginMgr)
+    '            Exit Sub
+
+    '        Case "_builtin_run_cube"
+    '            pluginManager.RunPluginByNameOnThread("Satellite Cubes Plugin", apiImpl)
+
+    '            Thread.Sleep(500)
+    '            ' Example: Keep more up close, with a strong bias (1.5), 10 bands, keep all within 500 units
+    '            Console.WriteLine(objectDictionary.Count)
+    '            ThinEvenSpatiallyAdaptiveAuto(objectDictionary, thinnedDict, 35000, userCoordinates, 200, 20, 20)
+    '            Console.WriteLine(objectDictionary.Count)
+    '            Console.WriteLine("ini builtin")
+
+    '        Case Else
+    '            ' Treat as plugin name (must match PluginMetadata.Name)
+    '            pluginManager.RunPluginByNameOnThread(pluginOrKeyword, apiImpl)
+    '    End Select
+    'End Sub
+
+
+    ''Sub HandleMCCommand(zone As SpatialZone, apiImpl As ICurrentApi, pluginManager As PluginManager, marginMgr As Margins.MarginManager)
+    'Sub HandleMCCommand_old_(apiImpl As ICurrentApi, pluginManager As PluginManager, marginMgr As Margins.MarginManager)
+    '    Select Case mccommand
+    '        Case "dummy data"
+    '            ' Do nothing
+    '            'Console.WriteLine(mccommand)
+    '        Case "list plugins"
+    '            pluginManager.ListAvailablePlugins()
+    '        Case "events"
+    '            pluginManager.RunPluginByNameOnThread("Event Aggregator", apiImpl)
+    '            'pluginManager.RunAllPluginsOnThreads(apiImpl)
+
+    '        Case "menu system"
+    '            pluginManager.RunPluginByNameOnThread("Menu System", apiImpl)
+    '        Case "test menu"
+    '            pluginManager.RunPluginByNameOnThread("Menu System Consumer", apiImpl)
+
+    '        Case "run cube"
+    '            pluginManager.RunPluginByNameOnThread("Satellite Cubes Plugin", apiImpl)
+
+    '            Thread.Sleep(500)
+    '            ' Example: Keep more up close, with a strong bias (1.5), 10 bands, keep all within 500 units
+    '            Console.WriteLine(objectDictionary.Count)
+    '            ThinEvenSpatiallyAdaptiveAuto(objectDictionary, thinnedDict, 35000, userCoordinates, 200, 20, 20)
+    '            Console.WriteLine(objectDictionary.Count)
+
+    '        Case "test mouseover"
+    '            pluginManager.RunPluginByNameOnThread("Spatial Zone Mouse Test", apiImpl)
+    '        Case "points"
+    '            pluginManager.RunPluginByNameOnThread("Hollow Shell Generator", apiImpl)
+
+    '        Case "list margins"
+    '            PrintAllMargins(marginMgr)
+    '            'Case "clearsz"
+    '            '    Console.WriteLine(mccommand)
+    '            '    zone.RemoveAllZoneObjects()
+    '            '    mccommand = "dummy data"
+    '            'Case "north set"
+    '            '    zone.SwapMargenSetNorth()
+    '            '    mccommand = "dummy data"
+    '            'Case "east set"
+    '            '    zone.SwapMargenSetEast()
+    '            '    mccommand = "dummy data"
+    '            'Case "south set"
+    '            '    zone.SwapMargenSetSouth()
+    '            '    mccommand = "dummy data"
+    '            'Case "west set"
+    '            '    zone.SwapMargenSetWest()
+    '            '    mccommand = "dummy data"
+    '            'Case "top set"
+    '            '    zone.SwapMargenSetTop()
+    '            '    mccommand = "dummy data"
+    '            'Case "bottom set"
+    '            '    zone.SwapMargenSetBottom()
+    '            '    mccommand = "dummy data"
+    '            'Case "move margin"
+    '            '    marginMgr.MarginJump("NorthSetRight", PanelType.NorthPanel, Nothing, 160)
+    '            '    zone.SwapMargenSetNorth()
+    '            '    mccommand = "dummy data"
+    '            'Case "move margin2"
+    '            '    marginMgr.MarginJump("NorthSetRight", PanelType.NorthPanel, Nothing, 100)
+    '            '    zone.SwapMargenSetNorth()
+    '            '    mccommand = "dummy data"
+    '        Case Else
+    '            ' You can add more commands here in the future
+    '    End Select
+    'End Sub
 
 
 
@@ -1930,10 +2012,8 @@ End Module
 
 
 Public Module PanelHelpers
-    ''' <summary>
-    ''' Returns a tuple: (intersectionsArr, intersectionsValidMask)
-    ''' intersectionsArr is an array (PanelTypeCount) of Vector3D, intersectionsValidMask as bitmask of valid panels hit.
-    ''' </summary>
+    ' Returns a tuple: (intersectionsArr, intersectionsValidMask)
+    ' intersectionsArr is an array (PanelTypeCount) of Vector3D, intersectionsValidMask as bitmask of valid panels hit.
     Public Function GetHolodecPanelIntersections(
         observer As (Integer, Integer, Integer),
         obj As (Integer, Integer, Integer),
@@ -2057,18 +2137,81 @@ Public Class PanelDataManager
 
 
     Public Sub New()
-        ' Prompt user for cube center; used for all panel/corner calculations
-        Console.Write("Enter the X coordinate of the center (-575 or -250): ")
-        Dim centerX As Integer = Convert.ToInt32(Console.ReadLine())
-        Console.Write("Enter the Y coordinate of the center (81 or 73): ")
-        Dim centerY As Integer = Convert.ToInt32(Console.ReadLine())
-        Console.Write("Enter the Z coordinate of the center (-512 or -78): ")
-        Dim centerZ As Integer = Convert.ToInt32(Console.ReadLine())
+        Dim centerX As Integer = IniManager.GetSectionInt("CubeCenter", "CenterX", -250)
+        Dim centerY As Integer = IniManager.GetSectionInt("CubeCenter", "CenterY", 73)
+        Dim centerZ As Integer = IniManager.GetSectionInt("CubeCenter", "CenterZ", -78)
+
         CenterCoordinates = (centerX, centerY, centerZ)
         populateCorners(CenterCoordinates)
-        PrecomputeAllPanelGrids() ' ^^ call after populateCorners
-        PopulatePanelInfo() ' ^^ call after PrecomputeAllPanelGrids
+        PrecomputeAllPanelGrids()
+        PopulatePanelInfo()
     End Sub
+
+    'Public Sub New_old2_()
+    '    Dim baseDir As String = AppContext.BaseDirectory
+    '    Dim iniPath = Path.Combine(baseDir, "commands.ini")
+
+    '    Dim centerX As Integer = -250 ' these "values" won't get "used" as the program exists if the ini does not exist.
+    '    Dim centerY As Integer = 73
+    '    Dim centerZ As Integer = -78
+
+    '    If File.Exists(iniPath) Then
+    '        Dim inSection As Boolean = False
+
+    '        For Each raw In File.ReadAllLines(iniPath)
+    '            Dim line = raw.Trim()
+
+    '            ' Check for section header
+    '            If line.StartsWith("[") AndAlso line.EndsWith("]") Then
+    '                inSection = line.Equals("[CubeCenter]", StringComparison.OrdinalIgnoreCase)
+    '                Continue For
+    '            End If
+
+    '            If Not inSection Then Continue For
+
+    '            ' Skip blanks/comments
+    '            If line = "" OrElse line.StartsWith(";") OrElse line.StartsWith("#") Then
+    '                Continue For
+    '            End If
+
+    '            ' Parse Key=Value
+    '            Dim eqIndex = line.IndexOf("="c)
+    '            If eqIndex > 0 Then
+    '                Dim k = line.Substring(0, eqIndex).Trim().ToLower()
+    '                Dim v = line.Substring(eqIndex + 1).Trim()
+
+    '                Select Case k
+    '                    Case "centerx"
+    '                        Integer.TryParse(v, centerX)
+    '                    Case "centery"
+    '                        Integer.TryParse(v, centerY)
+    '                    Case "centerz"
+    '                        Integer.TryParse(v, centerZ)
+    '                End Select
+    '            End If
+    '        Next
+    '    End If
+
+    '    CenterCoordinates = (centerX, centerY, centerZ)
+    '    populateCorners(CenterCoordinates)
+    '    PrecomputeAllPanelGrids()
+    '    PopulatePanelInfo()
+    'End Sub
+
+
+    'Public Sub New_old_()
+    '    ' Prompt user for cube center; used for all panel/corner calculations
+    '    Console.Write("Enter the X coordinate of the center (-575 or -250): ")
+    '    Dim centerX As Integer = Convert.ToInt32(Console.ReadLine())
+    '    Console.Write("Enter the Y coordinate of the center (81 or 73): ")
+    '    Dim centerY As Integer = Convert.ToInt32(Console.ReadLine())
+    '    Console.Write("Enter the Z coordinate of the center (-512 or -78): ")
+    '    Dim centerZ As Integer = Convert.ToInt32(Console.ReadLine())
+    '    CenterCoordinates = (centerX, centerY, centerZ)
+    '    populateCorners(CenterCoordinates)
+    '    PrecomputeAllPanelGrids() ' ^^ call after populateCorners
+    '    PopulatePanelInfo() ' ^^ call after PrecomputeAllPanelGrids
+    'End Sub
 
     Private Sub PopulatePanelInfo()
         For Each panel As PanelType In [Enum].GetValues(GetType(PanelType))
@@ -2418,13 +2561,154 @@ End Class
 
 #End Region
 
+Public Module ThinningDebugHelpers
 
+    ' Helper method: writes to Console what each parameter "needs/expects"
+    ' and what was actually provided.
+    Public Sub DumpThinEvenSpatiallyAdaptiveAutoSignatureRequirements(
+        ByRef sourceDict As ConcurrentDictionary(Of Integer, MyObject),
+        ByRef destDict As ConcurrentDictionary(Of Integer, MyObject),
+        numToLeave As Integer,
+        observer As (Integer, Integer, Integer),
+        keepRadius As Double,
+        Optional numBands As Integer = 10,
+        Optional closeBiasExponent As Double = 1.5
+    )
 
+        Console.WriteLine("===== ThinEvenSpatiallyAdaptiveAuto :: Signature diagnostics =====")
+        Console.WriteLine($"Timestamp (UTC): {DateTime.UtcNow:O}")
+        Console.WriteLine()
 
+        ' ---- sourceDict ----
+        Console.WriteLine("PARAM: sourceDict As ConcurrentDictionary(Of Integer, MyObject) (ByRef)")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - Not Nothing")
+        Console.WriteLine("    - Keys are Integer")
+        Console.WriteLine("    - Values are not Nothing")
+        Console.WriteLine("    - Used for: Keys.ToArray(), Count, indexing: sourceDict(key), TryRemove")
+        If sourceDict Is Nothing Then
+            Console.WriteLine("  Actual: Nothing")
+        Else
+            Console.WriteLine($"  Actual: Count={sourceDict.Count}")
+            Dim sampleKeys = sourceDict.Keys.Take(5).ToArray()
+            Console.WriteLine($"          Sample Keys (up to 5): {(If(sampleKeys.Length = 0, "<none>", String.Join(", ", sampleKeys)))}")
 
+            Dim nullValueCount As Integer = 0
+            Dim missingLocationCount As Integer = 0
+            Dim sampleLocs As New List(Of String)()
 
+            For Each kvp In sourceDict.Take(25)
+                If kvp.Value Is Nothing Then
+                    nullValueCount += 1
+                Else
+                    ' We cannot know the exact type of Location at compile time here beyond what's used:
+                    ' obj.Location.X/Y/Z must be readable and convertible to Long via CLng(...)
+                    Try
+                        Dim x As Long = CLng(kvp.Value.Location.X)
+                        Dim y As Long = CLng(kvp.Value.Location.Y)
+                        Dim z As Long = CLng(kvp.Value.Location.Z)
+                        If sampleLocs.Count < 5 Then sampleLocs.Add($"key={kvp.Key} -> ({x},{y},{z})")
+                    Catch
+                        missingLocationCount += 1
+                    End Try
+                End If
+            Next
 
+            Console.WriteLine($"          Null values among first 25 entries: {nullValueCount}")
+            Console.WriteLine($"          Location/XYZ conversion failures among first 25 entries: {missingLocationCount}")
+            If sampleLocs.Count > 0 Then
+                Console.WriteLine("          Sample Locations (up to 5):")
+                For Each s In sampleLocs
+                    Console.WriteLine($"            - {s}")
+                Next
+            End If
+        End If
+        Console.WriteLine()
 
+        ' ---- destDict ----
+        Console.WriteLine("PARAM: destDict As ConcurrentDictionary(Of Integer, MyObject) (ByRef)")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - Not Nothing (even though this method currently does not add to it)")
+        Console.WriteLine("    - Intended as storage for removed objects (comment says so)")
+        If destDict Is Nothing Then
+            Console.WriteLine("  Actual: Nothing")
+        Else
+            Console.WriteLine($"  Actual: Count={destDict.Count}")
+        End If
+        Console.WriteLine()
+
+        ' ---- numToLeave ----
+        Console.WriteLine("PARAM: numToLeave As Integer")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - > 0 (method exits early if <= 0)")
+        Console.WriteLine("    - < sourceDict.Count to actually thin (method exits early if Count <= numToLeave)")
+        Console.WriteLine($"  Actual: {numToLeave}")
+        If numToLeave <= 0 Then
+            Console.WriteLine("  Note: Method would Exit Sub because numToLeave <= 0.")
+        End If
+        If sourceDict IsNot Nothing AndAlso sourceDict.Count <= numToLeave Then
+            Console.WriteLine("  Note: Method would Exit Sub because sourceDict.Count <= numToLeave.")
+        End If
+        Console.WriteLine()
+
+        ' ---- observer ----
+        Console.WriteLine("PARAM: observer As (Integer, Integer, Integer)")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - 3-tuple of Integers")
+        Console.WriteLine("    - Used as a reference point, passed into Distance3D after CLng conversion")
+        Console.WriteLine($"  Actual: ({observer.Item1}, {observer.Item2}, {observer.Item3})")
+        Console.WriteLine()
+
+        ' ---- keepRadius ----
+        Console.WriteLine("PARAM: keepRadius As Double")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - Finite number (not NaN/Infinity)")
+        Console.WriteLine("    - Typically >= 0 (negative values make 'd <= keepRadius' unlikely unless d is also negative)")
+        Console.WriteLine("    - Used as threshold: if d <= keepRadius => band 0 and always kept")
+        Console.WriteLine($"  Actual: {keepRadius}")
+        If Double.IsNaN(keepRadius) OrElse Double.IsInfinity(keepRadius) Then
+            Console.WriteLine("  Warning: keepRadius is not finite (NaN/Infinity).")
+        ElseIf keepRadius < 0 Then
+            Console.WriteLine("  Warning: keepRadius < 0; threshold logic may behave unexpectedly.")
+        End If
+        Console.WriteLine()
+
+        ' ---- numBands ----
+        Console.WriteLine("PARAM: numBands As Integer (Optional)")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - >= 2 (because code uses (numBands - 1) as a divisor and indexes bands 0..numBands-1)")
+        Console.WriteLine("    - If = 1, (maxDist - keepRadius) / (numBands - 1) divides by zero")
+        Console.WriteLine($"  Actual: {numBands}")
+        If numBands < 2 Then
+            Console.WriteLine("  Warning: numBands < 2 will break band calculation (division by zero / invalid indexing).")
+        End If
+        Console.WriteLine()
+
+        ' ---- closeBiasExponent ----
+        Console.WriteLine("PARAM: closeBiasExponent As Double (Optional)")
+        Console.WriteLine("  Expects:")
+        Console.WriteLine("    - Finite number (not NaN/Infinity)")
+        Console.WriteLine("    - Typical: > 0")
+        Console.WriteLine("    - Meaning: exponent > 1 biases keeping closer bands more strongly")
+        Console.WriteLine($"  Actual: {closeBiasExponent}")
+        If Double.IsNaN(closeBiasExponent) OrElse Double.IsInfinity(closeBiasExponent) Then
+            Console.WriteLine("  Warning: closeBiasExponent is not finite (NaN/Infinity).")
+        ElseIf closeBiasExponent <= 0 Then
+            Console.WriteLine("  Warning: closeBiasExponent <= 0 may invert/flatten weighting behavior.")
+        End If
+        Console.WriteLine()
+
+        ' ---- Derived expectations (based on how the method uses the signature) ----
+        Console.WriteLine("DERIVED EXPECTATIONS (based on method body usage):")
+        Console.WriteLine("  - sourceDict.Count and sourceDict.Keys.ToArray() must be safe to call.")
+        Console.WriteLine("  - For each key used: sourceDict(key) must succeed during the distance/banding loops.")
+        Console.WriteLine("  - Each MyObject should have Location with X/Y/Z readable and convertible via CLng.")
+        Console.WriteLine("  - Distance3D must accept the tuple inputs and return a non-negative Double distance.")
+        Console.WriteLine("  - When thinning: sourceDict.TryRemove(key, removed) is used; removed may be Nothing if key vanished concurrently.")
+        Console.WriteLine("===============================================================")
+    End Sub
+
+End Module
 
 
 
