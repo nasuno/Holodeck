@@ -11,8 +11,8 @@
 &nbsp;&nbsp;**Prerequisites**:<br>
 CommandHelper/MethodScript<br>
 https://methodscript.com/docs/3.3.5//Download.html<br>
-build (Recommended)
-&nbsp;Alternative
+build (Recommended)<br>
+&nbsp;Alternative<br>
 https://github.com/nasuno/Holodeck/tree/main/CommandHelper
 
 ```
