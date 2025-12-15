@@ -10,7 +10,7 @@
 
 &nbsp;&nbsp;**Prerequisites**:<br>
 CommandHelper/MethodScript<br>
-https://methodscript.com/docs/3.3.5//Download.html build->(Recommended)<br>
+https://methodscript.com/docs/3.3.5//Download.html build (Recommended)<br>
 https://letsbuild.net/jenkins/job/CommandHelper/lastSuccessfulBuild/ Alternative
 
 ```
