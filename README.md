@@ -10,10 +10,8 @@
 
 &nbsp;&nbsp;**Prerequisites**:<br>
 CommandHelper/MethodScript<br>
-https://methodscript.com/docs/3.3.5//Download.html<br>
-build (Recommended)<br>
-&nbsp;Alternative<br>
-https://letsbuild.net/jenkins/job/CommandHelper/lastSuccessfulBuild/<br>
+https://methodscript.com/docs/3.3.5//Download.html&nbsp;build (Recommended)<br>
+https://letsbuild.net/jenkins/job/CommandHelper/lastSuccessfulBuild/&nbsp;Alternative
 
 ```
 mkdir mc
