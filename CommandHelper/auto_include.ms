@@ -130,9 +130,6 @@ proc _colorblocks(@longstring, @wooltype) {
 }
 
 proc _splitToBlackAndWhite(@theString) {
-    #@theString = replace(@theString, "BEGIN", "")
-    #@theString = replace(@theString, "END", "")
-
     assign(@splitstring, split("#", @theString))
     @segments = array()
     foreach(@splitstring, @part) {
@@ -260,6 +257,7 @@ proc _place_cube_planes() {
         }
     }
 }
+
 
 
 
