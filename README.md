@@ -77,9 +77,11 @@ Place your compiled plugin assembly (`.dll` file) in the `plugins/` directory lo
 
 ```
 ApplicationDirectory/
-├── Application.exe
+├── Current.PluginApi.dll
+├── Holo.exe
 ├── commands.ini
 └── plugins/
+    ├── Current.PluginApi.dll
     ├── MyPlugin.dll
     └── AnotherPlugin.dll
 ```
