@@ -12,6 +12,7 @@ Current.PluginApi.dll
 `/go` To start<br>
 `/reloadaliases` To stop
 
+<br><br>
 
 **Installation**
 
