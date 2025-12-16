@@ -6,7 +6,7 @@ Current.PluginApi.dll
 ![](https://s12.gifyu.com/images/bEdSG.gif)
 
 
-**To Use**
+**To Use** (In Minecraft)
 
 `/frame` A Single Frame<br>
 `/go` To start<br>
