@@ -198,6 +198,7 @@ When a player types `plugin test` in Minecraft, the host executes the plugin nam
 ---
 
 https://github.com/nasuno/Holodeck_API<br>
-https://github.com/nasuno/Plugin-Events<br>
+https://github.com/nasuno/Plugin-Satellite-Cubes<br>
 https://github.com/nasuno/Plugin-SpatialZone-Demo<br>
-https://github.com/nasuno/Plugin-Satellite-Cubes
+https://github.com/nasuno/Plugin-Events<br>
+https://github.com/nasuno/Plugin-Menu-System
