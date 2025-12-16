@@ -14,7 +14,6 @@ https://methodscript.com/docs/3.3.5//Download.html build (Recommended)<br>
 https://letsbuild.net/jenkins/job/CommandHelper/lastSuccessfulBuild/ Alternative
 
 
-Follow similar instructions for linux
 ```
 mkdir mc
 mc/buildtools.exe
@@ -24,6 +23,7 @@ mc/plugins/commandhelper-(Recommended).jar
 java -jar spigot.jar
 /stop
 ```
+Follow similar instructions for linux
 
 &nbsp;&nbsp;**Add these commands to `aliases.msa`**:<br>
 mc/plugins/CommandHelper/aliases.msa<br>
