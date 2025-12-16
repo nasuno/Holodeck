@@ -14,7 +14,7 @@
 
 &nbsp;&nbsp;(In Minecraft)<br>
 `/frame` A Single Frame<br>
-`/go` &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;To start<br>
+`/go` &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;To start<br>
 `/reloadaliases` To stop
 
 <br>
