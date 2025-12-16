@@ -99,9 +99,14 @@ Public Module WordWrapConsole
         End Sub
     End Class
 
+    '  Runs of spaces/tabs grouped as a single token, making layout easier.
+    ' Runs of punctuation “…”, “!!!”, “???” stay intact as one punctuation token.
+    ' Unicode punctuation :   quotes, em-dashes, brackets, etc., are captured by \p{P}.
+    ' Soft hyphen: explicitly recognized And turned into a break opportunity without treating it Like normal punctuation.
+    ' Words with underscores/digits “foo_bar_123” Is a single word token via [\w]+.
     Function BreakWorkTextIntoTokens(paragraphText As String) As List(Of TextToken)
         Dim listOfTokens As New List(Of TextToken)
-        Dim tokenPattern As String = "([\t ]+|[\p{P}]+|[\w]+|[\xAD])"
+        Dim tokenPattern As String = "([\t ]+|[\p{P}]+|[\w]+|[\xAD])" ' I wouldn't mess with this further.
         Dim matches As MatchCollection = Regex.Matches(paragraphText, tokenPattern, RegexOptions.None)
         For Each match As Match In matches
             Dim tokenContent As String = match.Value

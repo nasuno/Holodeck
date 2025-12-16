@@ -153,7 +153,7 @@ Public Class Margins
     )
 
             ' Build the 3D line representation for this margin, collecting IDs
-            BuildMargin3DLine(marginType, panel, row, column, structId, m)
+            ' BuildMargin3DLine(marginType, panel, row, column, structId, m)
             Module1.structureDrawState(structId) = False
 
             ' Insert into dictionary
@@ -249,7 +249,7 @@ Public Class Margins
                 marginObj.Column = newCol.Value
             End If
 
-            RebuildMargin3DLine(marginObj)
+            ' RebuildMargin3DLine(marginObj)
         End Sub
 
         '---------------------------------------------------------------------------------
@@ -336,57 +336,57 @@ Public Class Margins
 
         ' Build the 3D geometry for a margin by enumerating the relevant row or column
         ' indices for the specified panel in panelData, then calling AddMyObjectToFactory
-        Private Sub BuildMargin3DLine(marginType As MarginType,
-                              panel As PanelType,
-                              row As Integer?,
-                              column As Integer?,
-                              structId As Integer,
-                              mg As Margin) ' <-- added parameter
-            Dim leftCol As Integer = panelData.PanelInfo(panel)("FurthestLeftColumn")
-            Dim rightCol As Integer = panelData.PanelInfo(panel)("FurthestRightColumn")
-            Dim topRow As Integer = panelData.PanelInfo(panel)("FurthestTopRow")
-            Dim bottomRow As Integer = panelData.PanelInfo(panel)("FurthestBottomRow")
+        'Private Sub BuildMargin3DLine(marginType As MarginType,
+        '                      panel As PanelType,
+        '                      row As Integer?,
+        '                      column As Integer?,
+        '                      structId As Integer,
+        '                      mg As Margin) ' <-- added parameter
+        '    Dim leftCol As Integer = panelData.PanelInfo(panel)("FurthestLeftColumn")
+        '    Dim rightCol As Integer = panelData.PanelInfo(panel)("FurthestRightColumn")
+        '    Dim topRow As Integer = panelData.PanelInfo(panel)("FurthestTopRow")
+        '    Dim bottomRow As Integer = panelData.PanelInfo(panel)("FurthestBottomRow")
 
-            ' Remove all objects from the global object dictionary before clearing the IDs list
-            For Each id In mg.ObjectIds
-                Module1.objectDictionary.TryRemove(id, Nothing)
-            Next
-            mg.ObjectIds.Clear() ' <-- clear existing IDs
+        '    ' Remove all objects from the global object dictionary before clearing the IDs list
+        '    For Each id In mg.ObjectIds
+        '        Module1.objectDictionary.TryRemove(id, Nothing)
+        '    Next
+        '    mg.ObjectIds.Clear() ' <-- clear existing IDs
 
-            If marginType = MarginType.RowMargin Then
-                Dim r = row.Value
-                For c = leftCol To rightCol
-                    Dim coord = panelDataGridLookup(panel, r, c)
-                    'Dim objId = Module1.AddMyObjectToFactory(coord.Item1, coord.Item2, coord.Item3, structId) ' <-- capture ID
-                    mg.ObjectIds.Add(objId) ' <-- store in Margin
-                Next
-            Else
-                Dim c = column.Value
-                For r = topRow To bottomRow
-                    Dim coord = panelDataGridLookup(panel, r, c)
-                    'Dim objId = Module1.AddMyObjectToFactory(coord.Item1, coord.Item2, coord.Item3, structId) ' <-- capture ID
-                    mg.ObjectIds.Add(objId) ' <-- store in Margin
-                Next
-            End If
-        End Sub
+        '    If marginType = MarginType.RowMargin Then
+        '        Dim r = row.Value
+        '        For c = leftCol To rightCol
+        '            Dim coord = panelDataGridLookup(panel, r, c)
+        '            'Dim objId = Module1.AddMyObjectToFactory(coord.Item1, coord.Item2, coord.Item3, structId) ' <-- capture ID
+        '            mg.ObjectIds.Add(objId) ' <-- store in Margin
+        '        Next
+        '    Else
+        '        Dim c = column.Value
+        '        For r = topRow To bottomRow
+        '            Dim coord = panelDataGridLookup(panel, r, c)
+        '            'Dim objId = Module1.AddMyObjectToFactory(coord.Item1, coord.Item2, coord.Item3, structId) ' <-- capture ID
+        '            mg.ObjectIds.Add(objId) ' <-- store in Margin
+        '        Next
+        '    End If
+        'End Sub
 
         ' Rebuild the 3D geometry for a margin after relocating, by:
         '   (1) turning off existing structure if present
         '   (2) building a new set of points
-        Private Sub RebuildMargin3DLine(mg As Margin)
-            ' Turn off old structure:
-            If Module1.structureDrawState.ContainsKey(mg.StructureID) Then
-                Module1.structureDrawState(mg.StructureID) = False
-            End If
+        'Private Sub RebuildMargin3DLine(mg As Margin)
+        '    ' Turn off old structure:
+        '    If Module1.structureDrawState.ContainsKey(mg.StructureID) Then
+        '        Module1.structureDrawState(mg.StructureID) = False
+        '    End If
 
-            ' Create a fresh structure ID and re-draw
-            mg.StructureID = GetNextStructureId()
-            BuildMargin3DLine(mg.Type, mg.Panel, mg.Row, mg.Column, mg.StructureID, mg)
-            Module1.structureDrawState(mg.StructureID) = False
+        '    ' Create a fresh structure ID and re-draw
+        '    mg.StructureID = GetNextStructureId()
+        '    BuildMargin3DLine(mg.Type, mg.Panel, mg.Row, mg.Column, mg.StructureID, mg)
+        '    Module1.structureDrawState(mg.StructureID) = False
 
-            ' By default, keep it invisible (unless toggled elsewhere)
-            Module1.structureDrawState.TryAdd(mg.StructureID, False)
-        End Sub
+        '    ' By default, keep it invisible (unless toggled elsewhere)
+        '    Module1.structureDrawState.TryAdd(mg.StructureID, False)
+        'End Sub
 
 
         ' For convenience, retrieve the panelData grid dictionary and return the (x,y,z)
@@ -431,7 +431,7 @@ Public Class Margins
                 mg.Row = currentRow
             End If
 
-            RebuildMargin3DLine(mg)
+            ' RebuildMargin3DLine(mg)
         End Sub
 
         ' For margins of type ColumnMargin, shift column left or right. If out of range,
@@ -458,7 +458,7 @@ Public Class Margins
                 mg.Column = currentCol
             End If
 
-            RebuildMargin3DLine(mg)
+            ' RebuildMargin3DLine(mg)
         End Sub
 
         '---------------------------------------------------------------------------------
