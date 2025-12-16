@@ -8,8 +8,8 @@ Current.PluginApi.dll
 
 **To Use**
 
-`/frame` A Single Frame
-`/go` To start
+`/frame` A Single Frame<br>
+`/go` To start<br>
 `/reloadaliases` To stop
 
 
