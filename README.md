@@ -13,7 +13,7 @@
 `Holo.exe` -or whatever you named it.
 
 &nbsp;&nbsp;(In Minecraft)<br>
-`/frame` A Single Frame<br>
+`/frame` &nbsp;&nbsp;&nbsp;A Single Frame<br>
 `/go` &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;To start<br>
 `/reloadaliases` To stop
 
