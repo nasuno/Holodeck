@@ -48,9 +48,7 @@ https://github.com/nasuno/Holodeck/tree/main/resourcepacks<br>
 `Holo_Wool-Glowstone`<br>
 `no-fog-without-optifine-1-21-6-e1750`
 
-
-
-
+---
 
 &nbsp;&nbsp;First Run
 
