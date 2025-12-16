@@ -173,7 +173,7 @@ End Class
 
 Plugins are triggered by commands defined in the `[Commands]` section of `commands.ini`.
 
-Format
+&nbsp;&nbsp;Format
 
 Each command mapping consists of two consecutive lines:<br>
 ```ini
@@ -183,7 +183,7 @@ Plugin Name
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Line 1:** The command string as received from Minecraft<br>
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Line 2:** The plugin name (must match `PluginMetadata.Name` exactly)
 
-Example
+&nbsp;&nbsp;Example
 
 To trigger the `My Plugin` plugin with the command `plugin test`:<br>
 ```ini
