@@ -52,9 +52,6 @@ https://github.com/nasuno/Holodeck/tree/main/resourcepacks<br>
 
 &nbsp;&nbsp;First Run
 
-The Holodeck also requires the API(Current.PluginApi.dll) to be present,<br>
-as well as having it in the Plugins folder for Plugins to share.
-
 On first run, if the application does not find the required resources, it creates them and exits with a setup message: 
 
  Resource           |  Location      | Description 
@@ -62,7 +59,10 @@ On first run, if the application does not find the required resources, it create
  Configuration file | `commands.ini` | Command mappings and settings 
  Plugins directory  | `plugins/`     | Location for plugin assemblies 
 
-Both are created in the application's base directory. 
+Both are created in the application's base directory.
+
+The Holodeck also requires the API(Current.PluginApi.dll) to be present,<br>
+as well as having it in the Plugins folder for Plugins to share.
 
 &nbsp;&nbsp;After first run:<br>
 1. Edit `commands.ini` to configure command mappings and settings
