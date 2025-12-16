@@ -96,7 +96,7 @@ ApplicationDirectory/ (no location requirement)
 ├── Current.PluginApi.dll
 ├── Holo.exe
 ├── commands.ini
-└── Font5x7
+├── Font5x7
 └── plugins/ (also put this in your Release or Debug folders for Visual Studio) so VS runs can load plugins
     ├── Current.PluginApi.dll
     ├── MyPlugin.dll
