@@ -1,7 +1,7 @@
 
 
 <br><br>
-
+Current.PluginApi.dll
 
 ![](https://s12.gifyu.com/images/bEdSG.gif)
 
@@ -52,9 +52,12 @@ https://github.com/nasuno/Holodeck/tree/main/resourcepacks<br>
 
 
 
-## First Run
+&nbsp;&nbsp;First Run
 
-On first launch, if the application does not find the required resources, it creates them and exits with a setup message: 
+The Holodeck also requires the API(Current.PluginApi.dll) to be present,<br>
+as well as having it in the Plugins folder for Plugins to share.
+
+On first run, if the application does not find the required resources, it creates them and exits with a setup message: 
 
  Resource           |  Location      | Description 
 --------------------|----------------|-------------
@@ -63,15 +66,14 @@ On first launch, if the application does not find the required resources, it cre
 
 Both are created in the application's base directory. 
 
-After first run:
-
+&nbsp;&nbsp;After first run:<br>
 1. Edit `commands.ini` to configure command mappings and settings
 2. Place your compiled plugin `.dll` files in the `plugins/` directory
 3. Restart the application
 
 ---
 
-## Plugin Location
+&nbsp;&nbsp;Plugin Location
 
 Place your compiled plugin assembly (`.dll` file) in the `plugins/` directory located in the application's base directory: 
 
@@ -84,20 +86,18 @@ ApplicationDirectory/
     └── AnotherPlugin.dll
 ```
 
-## Writing a Plugin
+&nbsp;&nbsp;Writing a Plugin
 
-### 1. Create the Class File
+Create the Class File
 
-Create a new VB.NET class library project.  Import the plugin API namespace:
-
+Create a new VB.NET class library project.  Import the plugin API namespace:<br>
 ```vb
 Imports Current.PluginApi
 ```
 
-### 2. Add the Metadata Attribute
+Add the Metadata Attribute
 
-Every plugin requires the `PluginMetadata` attribute:
-
+Every plugin requires the `PluginMetadata` attribute:<br>
 ```vb
 <PluginMetadata("My Plugin", "1.0", "Author", "Description of what the plugin does.")>
 Public Class MyPlugin
@@ -110,10 +110,9 @@ Public Class MyPlugin
  `author`      | String | Plugin author 
  `description` | String | Brief summary of functionality 
 
-### 3. Implement IPlugin
+Implement IPlugin
 
-Your class must implement the `IPlugin` interface:
-
+Your class must implement the `IPlugin` interface:<br>
 ```vb
     Implements IPlugin
 
@@ -127,7 +126,7 @@ Your class must implement the `IPlugin` interface:
 End Class
 ```
 
-### 4. Complete Example
+&nbsp;&nbsp;Complete Example
 
 ```vb
 Imports Current.PluginApi
@@ -146,34 +145,31 @@ Public Class MyPlugin
 End Class
 ```
 
-### 5. Build and Deploy
+&nbsp;&nbsp;Build and Deploy
 
-1. Build your class library project to produce a `.dll` file
-2. Copy the `.dll` to the `plugins/` directory
-3. Restart the host application
+1. Build your class library project to produce a `.dll` file<br>
+2. Copy the `.dll` to the `plugins/` directory<br>
+3. Restart the Holodeck application
 
 ---
 
-## Registering a Command
+&nbsp;&nbsp;Registering a Command
 
 Plugins are triggered by commands defined in the `[Commands]` section of `commands.ini`.
 
-### Format
+Format
 
-Each command mapping consists of two consecutive lines:
-
+Each command mapping consists of two consecutive lines:<br>
 ```ini
 command string
 Plugin Name
 ```
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Line 1:** The command string as received from Minecraft<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;**Line 2:** The plugin name (must match `PluginMetadata.Name` exactly)
 
-- **Line 1:** The command string as received from Minecraft
-- **Line 2:** The plugin name (must match `PluginMetadata.Name` exactly)
+Example
 
-### Example
-
-To trigger the `My Plugin` plugin with the command `plugin test`:
-
+To trigger the `My Plugin` plugin with the command `plugin test`:<br>
 ```ini
 [Commands]
 plugin test
