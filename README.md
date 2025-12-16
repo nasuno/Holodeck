@@ -8,10 +8,10 @@
 
 **To Use**
 
-(In System)<br>
+&nbsp;&nbsp;(In System)<br>
 `Holo.exe` -or whatever you named it.
 
-(In Minecraft)<br>
+&nbsp;&nbsp;(In Minecraft)<br>
 `/frame` A Single Frame<br>
 `/go` To start<br>
 `/reloadaliases` To stop
