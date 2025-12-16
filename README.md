@@ -6,8 +6,12 @@ Current.PluginApi.dll
 ![](https://s12.gifyu.com/images/bEdSG.gif)
 
 
-**To Use** (In Minecraft)
+**To Use**
 
+(In System)<br>
+`Holo.exe` -or whatever you named it.
+
+(In Minecraft)<br>
 `/frame` A Single Frame<br>
 `/go` To start<br>
 `/reloadaliases` To stop
