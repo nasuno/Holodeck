@@ -76,14 +76,15 @@ as well as having it in the Plugins folder for Plugins to share.
 Place your compiled plugin assembly (`.dll` file) in the `plugins/` directory located in the application's base directory: 
 
 ```
-ApplicationDirectory/
+ApplicationDirectory/ (no location requirement)
 ├── Current.PluginApi.dll
 ├── Holo.exe
 ├── commands.ini
-└── plugins/
+└── plugins/ (also put this in your Release or Debug folders for Visual Studio) so VS runs can load plugins
     ├── Current.PluginApi.dll
     ├── MyPlugin.dll
     └── AnotherPlugin.dll
+we forget to add a fonts folder.
 ```
 
 &nbsp;&nbsp;Writing a Plugin
