@@ -6,6 +6,13 @@ Current.PluginApi.dll
 ![](https://s12.gifyu.com/images/bEdSG.gif)
 
 
+**To Use**
+
+`/frame` A Single Frame
+`/go` To start
+`/reloadaliases` To stop
+
+
 **Installation**
 
 &nbsp;&nbsp;**Prerequisites**:<br>
