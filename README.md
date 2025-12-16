@@ -35,7 +35,7 @@ mc/plugins/commandhelper-(Recommended).jar
 java -jar spigot.jar
 /stop
 ```
-Follow similar instructions for linux
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Follow similar instructions for linux
 
 &nbsp;&nbsp;**Add these commands to `aliases.msa`**:<br>
 mc/plugins/CommandHelper/aliases.msa<br>
