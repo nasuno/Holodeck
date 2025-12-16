@@ -75,6 +75,7 @@ On first run, if the application does not find the required resources, it create
 
 Both are created in the application's base directory.
 
+https://github.com/nasuno/Holodeck_API<br>
 The Holodeck also requires the API(Current.PluginApi.dll) to be present,<br>
 as well as having it in the Plugins folder for Plugins to share.
 
