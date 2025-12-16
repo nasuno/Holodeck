@@ -194,3 +194,10 @@ My Plugin
 ```
 
 When a player types `plugin test` in Minecraft, the host executes the plugin named `My Plugin`.
+
+---
+
+https://github.com/nasuno/Holodeck_API<br>
+https://github.com/nasuno/Plugin-Events<br>
+https://github.com/nasuno/Plugin-SpatialZone-Demo<br>
+https://github.com/nasuno/Plugin-Satellite-Cubes
