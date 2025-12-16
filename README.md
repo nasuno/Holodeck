@@ -1,7 +1,6 @@
 
 
 <br><br>
-Current.PluginApi.dll
 
 ![](https://s12.gifyu.com/images/bEdSG.gif)
 
