@@ -829,7 +829,7 @@ Public Module IniManager
             Console.WriteLine()
             Console.WriteLine("NEXT STEPS:")
             Console.WriteLine("  1. Edit the configuration file to customize command mappings and settings")
-            Console.WriteLine("  2. Place your plugin assemblies (. dll files) in the plugins directory")
+            Console.WriteLine("  2. Place your plugin assemblies (.dll files) in the plugins directory")
             Console.WriteLine("  3. Restart the application")
         ElseIf iniCreated Then
             Console.WriteLine("The configuration file was missing and has been created:")
@@ -883,4 +883,5 @@ Public Module IniManager
             End If
         Next
     End Sub
+
 End Module
