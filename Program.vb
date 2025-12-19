@@ -207,12 +207,12 @@ Public Module Module1
         'scattering()
 
 
-        CreateGridLinesGrid(-250, 70, -78, 90210, 10, 10, 2000, 1000)
-        Console.WriteLine("created grid lines")
-        Console.WriteLine(objectDictionary.Count)
+        'CreateGridLinesGrid(-250, 70, -78, 90210, 10, 10, 2000, 1000)
+        'Console.WriteLine("created grid lines")
+        'Console.WriteLine(objectDictionary.Count)
         '      ThinEvenSpatiallyAdaptiveAuto(objectDictionary, thinnedDict, 50000, userCoordinates, 500, 10, 20)
-        Console.WriteLine("Thinned objectDictionary")
-        Console.WriteLine(objectDictionary.Count)
+        'Console.WriteLine("Thinned objectDictionary")
+        'Console.WriteLine(objectDictionary.Count)
 
 
         Console.WriteLine("pre-plugin 3D objects loaded")
@@ -2709,6 +2709,7 @@ Public Module ThinningDebugHelpers
     End Sub
 
 End Module
+
 
 
 
