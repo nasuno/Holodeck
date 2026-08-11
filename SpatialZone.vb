@@ -17,10 +17,9 @@ Public Class SpatialZone
     Private collectedOffPoints As New List(Of (Integer, Integer, Integer))
     Private collectedOffObjectIds As New List(Of Integer)
 
-    ''' <summary>
-    ''' Invert only the SECOND character cell (row 0, col 1).  
-    ''' Flips ColorOverride on pre-created objects, then clears the temp lists.
-    ''' </summary>
+    ' Invert only the SECOND character cell (row 0, col 1).  
+    ' Flips ColorOverride on pre-created objects, then clears the temp lists.
+
     Public Sub InvertColorsOn()
         ' 1) First revert any previous second‐cell inversion
         InvertColorsOff()

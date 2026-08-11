@@ -5,6 +5,7 @@
 Imports System.Collections.Concurrent
 Imports System.Collections.Immutable
 Imports System.IO
+Imports System.Numerics
 Imports System.Reflection
 Imports System.Threading
 Imports Current.PluginApi
@@ -15,6 +16,45 @@ Imports Current.PluginApi
 
 Public Class CurrentApiImpl
     Implements ICurrentApi
+
+    Private _coordinateSystems As New ConcurrentDictionary(Of String, CoordinateSystem)()
+
+    ' Mirrors the CoordinateSystem registry exactly; the ONE active scheme
+    ' lives in Module1.CurrentColorScheme, as CurrentUCS does.
+    Private _colorSchemes As New ConcurrentDictionary(Of String, ColorScheme)()
+
+    Public Function CreateColorScheme(name As String) As ColorScheme Implements ICurrentApi.CreateColorScheme
+        If String.IsNullOrWhiteSpace(name) Then Return Nothing
+        If String.Equals(name, "Default", StringComparison.OrdinalIgnoreCase) Then
+            Return Module1.DefaultColorScheme   ' C4: reserved, never duplicated
+        End If
+        Return _colorSchemes.GetOrAdd(name, Function(n) New ColorScheme(n))
+    End Function
+
+    Public Function GetColorScheme(name As String) As ColorScheme Implements ICurrentApi.GetColorScheme
+        If String.Equals(name, "Default", StringComparison.OrdinalIgnoreCase) Then
+            Return Module1.DefaultColorScheme
+        End If
+        Dim cs As ColorScheme = Nothing
+        _colorSchemes.TryGetValue(name, cs)
+        Return cs
+    End Function
+
+    Public Function GetAllColorSchemeNames() As List(Of String) Implements ICurrentApi.GetAllColorSchemeNames
+        Dim names = _colorSchemes.Keys.ToList()
+        names.Insert(0, "Default")
+        Return names
+    End Function
+
+    Public Sub SetActiveColorScheme(name As String) Implements ICurrentApi.SetActiveColorScheme
+        Dim cs = GetColorScheme(name)
+        If cs IsNot Nothing Then Module1.CurrentColorScheme = cs   ' unknown name: refuse, never guess
+    End Sub
+
+    Public Function GetActiveColorScheme() As ColorScheme Implements ICurrentApi.GetActiveColorScheme
+        Return Module1.CurrentColorScheme   ' LIVE instance - the GetActiveUCS lesson, applied from birth
+    End Function
+
 
     ' === OBJECT CONTROL ===
     Public Sub RemoveObjectsByStructureId(structureId As Integer) Implements ICurrentApi.RemoveObjectsByStructureId
@@ -45,6 +85,53 @@ Public Class CurrentApiImpl
         Module1.structureDrawState(structureId) = isOn
     End Sub
 
+
+
+
+
+
+    ' === UCS OBJECT CONTROL ===
+
+    Public Sub RemoveObjectsByStructureId_UCS(structureId As Integer) Implements ICurrentApi.RemoveObjectsByStructureId_UCS
+        Module1.RemoveObjectsByStructureId_UCS(structureId)
+    End Sub
+
+    Public ReadOnly Property objectDictionary_UCS As ConcurrentDictionary(Of Integer, MyObject) Implements ICurrentApi.objectDictionary_UCS
+        Get
+            Return Module1.objectDictionary_UCS
+        End Get
+    End Property
+
+    Public ReadOnly Property structureObjectIDs_UCS As ConcurrentDictionary(Of Integer, ImmutableList(Of Integer)) Implements ICurrentApi.structureObjectIDs_UCS
+        Get
+            Return Module1.structureObjectIDs_UCS
+        End Get
+    End Property
+
+    Public Sub SetStructureDrawState_UCS(structureId As Integer, isOn As Boolean) Implements ICurrentApi.SetStructureDrawState_UCS
+        Module1.structureDrawState_UCS(structureId) = isOn
+    End Sub
+
+    Public Function AddMyObjectToFactory_UCS(x As Integer, y As Integer, z As Integer, structureId As Integer) As Integer Implements ICurrentApi.AddMyObjectToFactory_UCS
+        Return Module1.AddMyObjectToFactory_UCS(x, y, z, structureId)
+    End Function
+
+
+
+
+    ' === UCS TRANSFORM CONTROL ===
+
+    Public Sub SetUCS(origin As (Double, Double, Double), rotation As Quaternion) Implements ICurrentApi.SetUCS
+        Module1.SetUCS(origin, rotation)
+    End Sub
+
+    Public Sub ResetUCSToDefault() Implements ICurrentApi.ResetUCSToDefault
+        Module1.ResetUCSToDefault()
+    End Sub
+
+
+
+
     ' === UTILITY ===
     Public Function Bresenham3D(startX As Integer, startY As Integer, startZ As Integer,
                                 endX As Integer, endY As Integer, endZ As Integer) As List(Of (Integer, Integer, Integer)) Implements ICurrentApi.Bresenham3D
@@ -63,6 +150,7 @@ Public Class CurrentApiImpl
         Module1.ThinEvenSpatiallyAdaptiveAuto(sourceDict, destDict, numToLeave, observer, keepRadius, numBands, closeBiasExponent)
     End Sub
 
+
     ' === TRIANGLE CONTROL ===
     Public Sub RemoveAllTrianglesInSet(setId As Integer) Implements ICurrentApi.RemoveAllTrianglesInSet
         Module1.RemoveAllTrianglesInSet(setId)
@@ -74,6 +162,20 @@ Public Class CurrentApiImpl
                                setId As Integer) As Integer Implements ICurrentApi.AddTriangle
         Return Module1.AddTriangle(x1, y1, z1, x2, y2, z2, x3, y3, z3, setId)
     End Function
+
+
+
+    ' === UCS TRIANGLE CONTROL ==
+    Public Function AddTriangle_UCS(x1 As Double, y1 As Double, z1 As Double,
+                                    x2 As Double, y2 As Double, z2 As Double,
+                                    x3 As Double, y3 As Double, z3 As Double,
+                                    setId As Integer) As Integer Implements ICurrentApi.AddTriangle_UCS
+        Return Module1.AddTriangle_UCS(x1, y1, z1, x2, y2, z2, x3, y3, z3, setId)
+    End Function
+
+
+
+
 
     Public ReadOnly Property triangleGroups As Object Implements ICurrentApi.triangleGroups
         Get
@@ -301,7 +403,100 @@ Public Class CurrentApiImpl
               ValueTuple(Of Double, Double, Double))
     End Function
 
+
+
+
+
+
+
+
+
+
+
+
+    Public Function GetGazeRay() As (EyeX As Double, EyeY As Double, EyeZ As Double,
+                                 DirX As Double, DirY As Double, DirZ As Double,
+                                 Valid As Boolean) Implements ICurrentApi.GetGazeRay
+        Dim g = Module1.CurrentGazeRay
+        Return (g.Eye.Item1, g.Eye.Item2, g.Eye.Item3,
+            g.Dir.Item1, g.Dir.Item2, g.Dir.Item3, g.Valid)
+    End Function
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ===================================================
+    ' ===============  COORDINATE SYSTEM REGISTRY  ======
+    ' ===================================================
+
+    Public Function CreateCoordinateSystem(name As String) As CoordinateSystem Implements ICurrentApi.CreateCoordinateSystem
+        Return _coordinateSystems.GetOrAdd(name, Function(n) New CoordinateSystem(n))
+    End Function
+
+    Public Function GetCoordinateSystem(name As String) As CoordinateSystem Implements ICurrentApi.GetCoordinateSystem
+        Dim cs As CoordinateSystem = Nothing
+        _coordinateSystems.TryGetValue(name, cs)
+        Return cs
+    End Function
+
+    Public Sub RemoveCoordinateSystem(name As String) Implements ICurrentApi.RemoveCoordinateSystem
+        Dim removed As CoordinateSystem = Nothing
+        _coordinateSystems.TryRemove(name, removed)
+    End Sub
+
+    Public Function GetAllCoordinateSystemNames() As List(Of String) Implements ICurrentApi.GetAllCoordinateSystemNames
+        Return _coordinateSystems.Keys.ToList()
+    End Function
+
+    Public Sub SetActiveUCS(name As String) Implements ICurrentApi.SetActiveUCS
+        Dim cs As CoordinateSystem = Nothing
+        If _coordinateSystems.TryGetValue(name, cs) Then
+            Module1.SetUCS(cs.Origin, cs.Rotation)
+        End If
+    End Sub
+
+    Public Function GetActiveUCS() As CoordinateSystem Implements ICurrentApi.GetActiveUCS
+        ' LIVE instance, never a copy. The Version counter is only meaningful
+        ' on the object actually being mutated: a per-call copy is born at
+        ' Version 0 every call and defeats every version-keyed cache downstream
+        ' (the old fresh-copy path also ran the ctor per tick for nothing).
+        ' Callers receive a mutable reference; the read-only contract is by
+        ' convention - pose writes belong to SetUCS/SetActiveUCS.
+        Return Module1.CurrentUCS
+    End Function
+
+
+
+
+
+
+
+
+
+
 End Class
+
+
+
+
+
+
+
+
 
 ' =======================================================
 ' ===============  SPATIAL ZONE ADAPTER  ================
@@ -829,7 +1024,7 @@ Public Module IniManager
             Console.WriteLine()
             Console.WriteLine("NEXT STEPS:")
             Console.WriteLine("  1. Edit the configuration file to customize command mappings and settings")
-            Console.WriteLine("  2. Place your plugin assemblies (.dll files) in the plugins directory")
+            Console.WriteLine("  2. Place your plugin assemblies (. dll files) in the plugins directory")
             Console.WriteLine("  3. Restart the application")
         ElseIf iniCreated Then
             Console.WriteLine("The configuration file was missing and has been created:")
@@ -883,5 +1078,4 @@ Public Module IniManager
             End If
         Next
     End Sub
-
 End Module

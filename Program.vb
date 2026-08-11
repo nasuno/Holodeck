@@ -28,6 +28,77 @@ End Structure
 Public Module Module1
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' Active UCS instance — default centers on holodeck — 
+    Public CurrentUCS As New CoordinateSystem()
+
+    ' Auto-align UCS origin to holodeck center — 
+    Public Sub InitializeDefaultUCS()
+        Dim c = panelData.Center
+        CurrentUCS.SetTransform((CDbl(c.Item1), CDbl(c.Item2), CDbl(c.Item3)), Quaternion.Identity)
+    End Sub
+
+    ' Swap to custom UCS at runtime — 
+    Public Sub SetUCS(origin As (Double, Double, Double), rotation As Quaternion)
+        CurrentUCS.SetTransform(origin, rotation)
+    End Sub
+
+    ' Reset UCS to holodeck-centered default — 
+    Public Sub ResetUCSToDefault()
+        InitializeDefaultUCS()
+    End Sub
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' MODULE STATE — matches original order
+    ' ═══════════════════════════════════════════════════════════════════════════
+
     Private requiredStationaryFrames As Integer = IniManager.GetSectionInt("Tuning", "RequiredStationaryFrames", 5)
     'Private requiredStationaryFrames As Integer = 5 ' <--- Set to whatever you like
     Private stationaryFrameCount As Integer = 0
@@ -46,33 +117,116 @@ Public Module Module1
 
 
 
-    ' --- Hot bucket and bump-sort system ---
 
-    ' All triangle set IDs ever seen
+
+
+
+
+
+
+
+    ' CAD gaze ray channel — raw strings from script, WCS doubles after parse.
+    Public gazeEyeStr As String = ""
+    Public gazeDirStr As String = ""
+    Public gazeValidStr As String = "false"
+
+    ' Immutable snapshot published as one reference for safe cross-thread read.
+    Public Class GazeRay
+        Public ReadOnly Eye As (Double, Double, Double)
+        Public ReadOnly Dir As (Double, Double, Double)
+        Public ReadOnly Valid As Boolean
+        Public Sub New(eye As (Double, Double, Double), dir As (Double, Double, Double), valid As Boolean)
+            Me.Eye = eye
+            Me.Dir = dir
+            Me.Valid = valid
+        End Sub
+    End Class
+
+    Private _gazeRay As GazeRay = New GazeRay((0, 0, 0), (0, 0, -1), False)
+    Public Property CurrentGazeRay As GazeRay
+        Get
+            Return Volatile.Read(_gazeRay)
+        End Get
+        Set(value As GazeRay)
+            Volatile.Write(_gazeRay, value)
+        End Set
+    End Property
+
+
+    ' *
+
+    ' Parse the script's WCS gaze strings into a GazeRay and publish atomically.
+    ' Malformed or gazeValid<>"true" publishes Valid=False -> CursorManager holds last.
+    Private Sub UpdateGazeRay()
+        Dim eye As (Double, Double, Double)
+        Dim dir As (Double, Double, Double)
+        If gazeValidStr <> "true" OrElse Not TryParseTriple(gazeEyeStr, eye) OrElse Not TryParseTriple(gazeDirStr, dir) Then
+            CurrentGazeRay = New GazeRay((0, 0, 0), (0, 0, -1), False)
+            Return
+        End If
+        CurrentGazeRay = New GazeRay(eye, dir, True)
+    End Sub
+
+    Private Function TryParseTriple(s As String, ByRef result As (Double, Double, Double)) As Boolean
+        result = (0, 0, 0)
+        If String.IsNullOrWhiteSpace(s) Then Return False
+        Dim parts = s.Split(","c)
+        If parts.Length <> 3 Then Return False
+        Dim x, y, z As Double
+        Dim ci = Globalization.CultureInfo.InvariantCulture
+        Dim st = Globalization.NumberStyles.Any
+        If Not Double.TryParse(parts(0), st, ci, x) Then Return False
+        If Not Double.TryParse(parts(1), st, ci, y) Then Return False
+        If Not Double.TryParse(parts(2), st, ci, z) Then Return False
+        result = (x, y, z)
+        Return True
+    End Function
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' HOT BUCKET AND BUMP-SORT SYSTEM
+    ' Unified scoring across WCS and UCS triangles. Sets are re-ordered by score every frame;
+    ' sets that blocked last frame ("hot") sort to the top, the rest to the bottom.
+    ' Hot membership is tracked by generation marks (hotMark/hotGen).
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    ' Triangle set IDs currently present; kept in sync with triangleGroups by the add/remove mutators.
     Private allSetIds As New ConcurrentDictionary(Of Integer, Byte)()
 
-    ' Set IDs that were “hot” this frame (blocked at least one ray this frame)
+    '*Legacy hot-set store. No longer authoritative: hot tracking moved to hotMark/hotGen below.
+    ' Now only cleared by BeginFrameScoring/EndOfFrameCleanup, which is a no-op (it stays empty).
     Private hotSetIds As New ConcurrentDictionary(Of Integer, Byte)()
 
     ' Long-lived score per setId (aggregated & decayed over time)
     Private triangleSetSortScores As New ConcurrentDictionary(Of Integer, Integer)()
 
-    ' Per-frame sorted list of setIds (highest score first)
+    ' Alias to the live sortedSetIdsBuffer, set during frame prep. Valid only within the current
+    ' frame (cleared and refilled next frame).
     Private pregeneratedSortedSetIds As List(Of Integer) = Nothing
 
-    ' Per-frame decay controls (no hard reset)
+    ' Per-frame decay controls
     Private SCORE_BUMP_ON_BLOCK As Integer = IniManager.GetSectionInt("Tuning", "ScoreBumpOnBlock", 8)      ' how much to add when a set blocks
     Private SCORE_DECAY_PER_FRAME As Integer = IniManager.GetSectionInt("Tuning", "ScoreDecayPerFrame", 1)  ' how much to subtract each frame
 
-    ' Concurrent triangle data structures
+    ' Concurrent triangle stores; plugins mutate these on their own threads. Every add or remove must
+    ' bump membershipVersion or the build's per-set caches go stale (see AddTriangleInternal / RemoveAllTrianglesInSet).
     Public triangleGroups As New ConcurrentDictionary(Of Integer, ConcurrentBag(Of Integer))()
     Public trianglesById As New ConcurrentDictionary(Of Integer, Triangle)()
 
-    ' Used only to track which setIds currently exist (if you need it)
+    ' Track which setIds currently exist
     Public sortedSetIds As New ConcurrentDictionary(Of Integer, Byte)()
 
-    ' --- Reusable buffers for per-frame sorting ---
-    ' These avoid allocating new Dictionary and List every frame.
+    ' Reusable buffers for per-frame sorting
     Private sortScoresBuffer As New Dictionary(Of Integer, Integer)()
     Private sortedSetIdsBuffer As New List(Of Integer)()
 
@@ -80,7 +234,89 @@ Public Module Module1
 
 
 
-    ' Removes all objects for a given structureId
+
+    ' Bumped only by the two membership mutators; gates the membership caches.
+    Private membershipVersion As Long = 0
+    Private lastBuiltMembershipVersion As Long = Long.MinValue
+
+    ' Build-thread-owned membership snapshot (thread-safe by isolation). Rebuilt only on version change.
+    Private cachedSetIds As Integer() = Array.Empty(Of Integer)()
+    Private cachedSetCount As Integer = 0
+    Private cachedSetMembers As New Dictionary(Of Integer, Integer())()
+
+    ' Generation-marked hot set: a set is hot this frame iff its mark equals hotGen. Replaces clearing
+    ' a ConcurrentDictionary every frame (that Clear allocates a fresh bucket table when non-empty).
+    Private hotMark As New ConcurrentDictionary(Of Integer, Integer)()
+    Private hotGen As Integer = 1
+
+    ' Live triangle count in the reused frameTriangles buffer. Consumers iterate to this, not .Length.
+    Private frameTriangleCount As Integer = 0
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' FRAME TRIANGLE BUFFER
+    ' Reused, over-sized FrameTriangle array, refilled in score order each frame with fresh AABBs.
+    ' Valid entries are [0, frameTriangleCount); the tail holds stale entries from earlier frames.
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    ' Wrapper: Triangle + AABB computed from current vertex positions
+    Private Structure FrameTriangle
+        Public Tri As Triangle
+        Public MinX, MinY, MinZ, MaxX, MaxY, MaxZ As Double
+
+        ' AABB computed fresh each frame (triangles move)
+        Public Sub New(t As Triangle)
+            Tri = t
+            MinX = Math.Min(t.A.Item1, Math.Min(t.B.Item1, t.C.Item1))
+            MinY = Math.Min(t.A.Item2, Math.Min(t.B.Item2, t.C.Item2))
+            MinZ = Math.Min(t.A.Item3, Math.Min(t.B.Item3, t.C.Item3))
+            MaxX = Math.Max(t.A.Item1, Math.Max(t.B.Item1, t.C.Item1))
+            MaxY = Math.Max(t.A.Item2, Math.Max(t.B.Item2, t.C.Item2))
+            MaxZ = Math.Max(t.A.Item3, Math.Max(t.B.Item3, t.C.Item3))
+        End Sub
+    End Structure
+
+    ' Reused buffer (grows, never shrinks). Read only up to frameTriangleCount; .Length is capacity,
+    ' not the live count.
+    Private frameTriangles As FrameTriangle() = Array.Empty(Of FrameTriangle)()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' OBJECT REMOVAL
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    ' Removes all WCS objects for a given structureId — unchanged
     Sub RemoveObjectsByStructureId(structureId As Integer)
         Dim objectIds As ImmutableList(Of Integer) = Nothing
         If structureObjectIDs.TryGetValue(structureId, objectIds) Then
@@ -91,6 +327,28 @@ Public Module Module1
         End If
         structureDrawState.TryRemove(structureId, Nothing)
     End Sub
+
+    ' Removes all UCS objects for a given structureId — NEW
+    Sub RemoveObjectsByStructureId_UCS(structureId As Integer)
+        Dim objectIds As ImmutableList(Of Integer) = Nothing
+        If structureObjectIDs_UCS.TryGetValue(structureId, objectIds) Then
+            For Each objId In objectIds
+                objectDictionary_UCS.TryRemove(objId, Nothing)
+            Next
+            structureObjectIDs_UCS.TryRemove(structureId, objectIds)
+        End If
+        structureDrawState_UCS.TryRemove(structureId, Nothing)
+    End Sub
+
+
+
+
+
+
+
+
+
+
 
 
     Sub PrintAllMargins(marginMgr As Margins.MarginManager)
@@ -296,6 +554,14 @@ Public Module Module1
                     rightlickidemp = JsonElementToString(rootElement.GetProperty("rightlickidemp"))
                     leftclickcoord = JsonElementToString(rootElement.GetProperty("leftclickcoord"))
                     leftlickidemp = JsonElementToString(rootElement.GetProperty("leftlickidemp"))
+
+                    gazeEyeStr = JsonElementToString(rootElement.GetProperty("gazeEye"))
+                    gazeDirStr = JsonElementToString(rootElement.GetProperty("gazeDir"))
+                    gazeValidStr = JsonElementToString(rootElement.GetProperty("gazeValid"))
+
+
+
+
                 End Using
 
 
@@ -305,11 +571,30 @@ Public Module Module1
                 '    lastMccommandIdemp = mccommandidemp
                 'End If
 
+
+
+
+
+
+
+
                 ' Right Click Idemp
                 If Not rightlickidemp = "clear" AndAlso Not rightlickidemp = "dummy data" AndAlso Not rightlickidemp = lastRightclickIdemp Then
                     Console.WriteLine("right click idemp")
                     Console.WriteLine(rightlickidemp)
                     lastRightclickIdemp = rightlickidemp
+
+                    ' Parse observed location
+                    Dim coords = observedLocation.Split(","c)
+                    Dim x = CInt(coords(0))
+                    Dim y = CInt(coords(1))
+                    Dim z = CInt(coords(2))
+
+                    ' Get cell info
+                    Dim cellResult = GetCellFromWorld(panelData, x, y, z)
+
+                    TryAcquireEventAggregator()
+                    CallEventAggregator("NotifyMouseClickRight", cellResult.Panel, cellResult.Row, cellResult.Col, cellResult.Found)
                 End If
 
                 ' Left Click Idemp
@@ -317,7 +602,25 @@ Public Module Module1
                     Console.WriteLine("left click idemp")
                     Console.WriteLine(leftlickidemp)
                     lastLeftclickIdemp = leftlickidemp
+
+                    ' Parse observed location
+                    Dim coords = observedLocation.Split(","c)
+                    Dim x = CInt(coords(0))
+                    Dim y = CInt(coords(1))
+                    Dim z = CInt(coords(2))
+
+                    ' Get cell info
+                    Dim cellResult = GetCellFromWorld(panelData, x, y, z)
+
+                    TryAcquireEventAggregator()
+                    CallEventAggregator("NotifyMouseClickLeft", cellResult.Panel, cellResult.Row, cellResult.Col, cellResult.Found)
                 End If
+
+
+
+
+
+
 
                 Dim buffer As Byte() = Encoding.UTF8.GetBytes(responseString)
                 response.ContentLength64 = buffer.Length
@@ -392,6 +695,12 @@ Public Module Module1
 
 
 
+
+
+
+
+
+
     Sub fillUserCoordinates(playerData As String)
         Dim s As String = New String(playerData)
         Dim haveFloat As String() = s.Split(New Char() {","c})
@@ -402,40 +711,120 @@ Public Module Module1
 
 
 
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' OBJECT DICTIONARIES — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    ' WCS objects (original)
     Public structureDrawState As New ConcurrentDictionary(Of Integer, Boolean)
+    Public objectDictionary As New ConcurrentDictionary(Of Integer, MyObject)
+    Public structureObjectIDs As New ConcurrentDictionary(Of Integer, ImmutableList(Of Integer))()
+
+    ' UCS objects — 
+    Public structureDrawState_UCS As New ConcurrentDictionary(Of Integer, Boolean)
+    Public objectDictionary_UCS As New ConcurrentDictionary(Of Integer, MyObject)
+    Public structureObjectIDs_UCS As New ConcurrentDictionary(Of Integer, ImmutableList(Of Integer))()
+
     Private objectsIntersectionDict As New ConcurrentDictionary(Of Integer, IntersectionHistory)
 
-    Private previousFrameColorDict As New Dictionary(Of (Double, Double, Double), ObjectColor)()
-    Public Sub ProcessData()
+    ' Double-buffered frame dictionaries — swap instead of allocate+copy
+    Private frameColorDictA As New Dictionary(Of (Double, Double, Double), ObjectColor)()
+    Private frameColorDictB As New Dictionary(Of (Double, Double, Double), ObjectColor)()
+    Private frameIsInteriorA As New Dictionary(Of (Double, Double, Double), Boolean)()
+    Private frameIsInteriorB As New Dictionary(Of (Double, Double, Double), Boolean)()
+    Private useBufferA As Boolean = True
 
-        ' Detect observer settling
+    ' Cached output StringBuilder
+    Private CachedOutputBuilder As New StringBuilder()
+
+    ' Default scheme: all ranks 0 = every contest ties = legacy first-writer
+    ' twinkle, byte-for-byte the behavior before this feature existed. Active
+    ' until a plugin volunteers otherwise (contract C4 in Current.PluginApi).
+    ' MUST be declared BEFORE _currentColorScheme - Module field initializers
+    ' run in declaration order; reversed, the latter would be born Nothing.
+    Public ReadOnly DefaultColorScheme As New ColorScheme("Default")
+
+    Private _currentColorScheme As ColorScheme = DefaultColorScheme
+    Public Property CurrentColorScheme As ColorScheme
+        Get
+            Return Volatile.Read(_currentColorScheme)
+        End Get
+        Set(value As ColorScheme)
+            If value IsNot Nothing Then Volatile.Write(_currentColorScheme, value)
+        End Set
+    End Property
+
+    ' Per-frame rank snapshot (contract C3), keyed (reference, Version) - the
+    ' EnsureUcsCache pattern verbatim, seeded per R2 so the first frame builds.
+    ' Initial table is all-neutral, so even an unrun snapshot is harmless.
+    ' NOTE: VB sizes an array by its UPPER BOUND, so this is MaxObjectColor + 1
+    ' slots, index 0 unused because ObjectColor begins at 1. Never write +1/-1.
+    Private _frameRanks As Integer() = New Integer(MaxObjectColor) {}
+    Private _frameSchemeRef As ColorScheme = Nothing
+    Private _frameSchemeVersion As Long = Long.MinValue
+
+    Private Sub EnsureFrameRanks()
+        Dim cs = CurrentColorScheme          ' never Nothing: initializer + setter guard
+        Dim v = cs.Version
+        If cs Is _frameSchemeRef AndAlso v = _frameSchemeVersion Then Return
+        _frameSchemeRef = cs
+        _frameSchemeVersion = v
+        _frameRanks = cs.SnapshotRanks()
+    End Sub
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' PROCESS DATA — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    Public Sub ProcessData()
+        '-----------------------------------------------------------------------
+        ' OBSERVER SETTLING — detect when player stops moving
+        '-----------------------------------------------------------------------
         If lastRawInputCoordinates.Equals(lastInputCoordinates) Then
             stationaryFrameCount += 1
             If stationaryFrameCount >= requiredStationaryFrames Then
                 userCoordinates = lastRawInputCoordinates
             End If
         Else
-            stationaryFrameCount = 1 ' Reset to 1 since this is the first matching frame after movement
+            stationaryFrameCount = 1
         End If
         lastInputCoordinates = lastRawInputCoordinates
 
         UpdateObserverVectorData(userCoordinates, observedLocation)
 
-        ' Take fast, efficient snapshots as regular dictionaries (not arrays, not immutable)
+
+        UpdateGazeRay()
+
+
+
+
+
+
+
+
+        '-----------------------------------------------------------------------
+        ' SNAPSHOTS — fast copies for parallel processing
+        '-----------------------------------------------------------------------
         Dim objectDictSnapshot = New Dictionary(Of Integer, MyObject)(objectDictionary)
-        Dim trianglesByIdSnapshot = New Dictionary(Of Integer, Triangle)(trianglesById)
+        Dim objectDictSnapshot_UCS = New Dictionary(Of Integer, MyObject)(objectDictionary_UCS)
         Dim structureDrawStateSnapshot = New Dictionary(Of Integer, Boolean)(structureDrawState)
-        Dim triangleGroupsSnapshot = New Dictionary(Of Integer, ConcurrentBag(Of Integer))(triangleGroups)
-        Dim structureObjectIDsSnapshot = New Dictionary(Of Integer, Immutable.ImmutableList(Of Integer))(structureObjectIDs)
+        Dim structureDrawStateSnapshot_UCS = New Dictionary(Of Integer, Boolean)(structureDrawState_UCS)
 
         responseString = GenerateResponseString(
-        objectDictSnapshot,
-        trianglesByIdSnapshot,
-        structureDrawStateSnapshot,
-        triangleGroupsSnapshot,
-        structureObjectIDsSnapshot
-    )
-
+            objectDictSnapshot,
+            objectDictSnapshot_UCS,
+            structureDrawStateSnapshot,
+            structureDrawStateSnapshot_UCS
+        )
 
         ' Render debug info about triangle sorting to console (HUD)
         ' ########################################################################## RenderTriangleSortDebugOverlay()
@@ -458,27 +847,53 @@ Public Module Module1
 
 
 
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' CACHED HOLLOW BOUNDS — set once in InitializeFrameCaches
+    ' ═══════════════════════════════════════════════════════════════════════════
 
+    Private HollowMinX, HollowMaxX As Integer
+    Private HollowMinY, HollowMaxY As Integer
+    Private HollowMinZ, HollowMaxZ As Integer
 
-    ' --- Module-level caches (declare these at the top of your Module, outside any function) ---
     ' Cached static array of PanelType enum values
     Private CachedPanelTypeValues As PanelType() = CType([Enum].GetValues(GetType(PanelType)), PanelType())
 
-    ' Cached static PanelBounds (if panel geometry is static)
+    ' Cached static PanelBounds
     Private CachedPanelBounds As PanelBounds = Nothing
 
     ' Cached StringBuilder dictionary for each ObjectColor
     Private CachedColorBuilders As Dictionary(Of ObjectColor, StringBuilder) = Nothing
 
 
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' INITIALIZE FRAME CACHES — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
     Public Sub InitializeFrameCaches()
         ' Cache PanelBounds (after panelData is ready)
         CachedPanelBounds = New PanelBounds()
 
+        ' Cache hollow bounds for interior checks
+        HollowMinX = Math.Min(panelData.West_a.Item1, panelData.East_a.Item1)
+        HollowMaxX = Math.Max(panelData.West_a.Item1, panelData.East_a.Item1)
+        HollowMinY = Math.Min(panelData.Bottom_a.Item2, panelData.Top_a.Item2)
+        HollowMaxY = Math.Max(panelData.Bottom_a.Item2, panelData.Top_a.Item2)
+        HollowMinZ = Math.Min(panelData.North_a.Item3, panelData.South_a.Item3)
+        HollowMaxZ = Math.Max(panelData.North_a.Item3, panelData.South_a.Item3)
+
         ' Get all enum values as an array
         Dim colors As ObjectColor() = DirectCast([Enum].GetValues(GetType(ObjectColor)), ObjectColor())
 
-        ' Create the dictionary with a known capacity
+        ' Create the dictionary with known capacity
         Dim dict As New Dictionary(Of ObjectColor, StringBuilder)(colors.Length)
 
         ' Populate the dictionary
@@ -488,6 +903,9 @@ Public Module Module1
 
         ' Assign to the cache
         CachedColorBuilders = dict
+
+        ' Auto-align UCS to holodeck center — 
+        InitializeDefaultUCS()
     End Sub
 
 
@@ -497,301 +915,408 @@ Public Module Module1
 
 
 
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' GENERATE RESPONSE STRING — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
     Public Function GenerateResponseString(
-    objectDictSnap As Dictionary(Of Integer, MyObject),
-    trianglesByIdSnap As Dictionary(Of Integer, Triangle),
-    structureDrawState As Dictionary(Of Integer, Boolean),
-    triangleGroups As Dictionary(Of Integer, ConcurrentBag(Of Integer)),
-    structureObjectIDs As Dictionary(Of Integer, Immutable.ImmutableList(Of Integer))
-) As String
+        objectDictSnap As Dictionary(Of Integer, MyObject),
+        objectDictSnap_UCS As Dictionary(Of Integer, MyObject),
+        structureDrawState As Dictionary(Of Integer, Boolean),
+        structureDrawState_UCS As Dictionary(Of Integer, Boolean)
+    ) As String
 
         '-----------------------------------------------------------------------
         ' INITIALIZATION — cache pulls and per-call containers
         '-----------------------------------------------------------------------
-        ' Purpose: Prime cached values and allocate per-call, thread-safe containers.
-        ' Consumes: None (reads global caches).
-        ' Produces: PanelTypeValues/Count, bounds, colorBuilders cleared, and per-frame dicts.
-
-        ' Use cached PanelTypeValues and PanelBounds
         Dim PanelTypeValues As PanelType() = CachedPanelTypeValues
         Dim PanelTypeCount As Integer = PanelTypeValues.Length
         Dim bounds As PanelBounds = CachedPanelBounds
 
-        ' Clear and reuse the cached colorBuilders StringBuilders
+        EnsureFrameRanks()
+        Dim frameRanks As Integer() = _frameRanks
+
+        ' Clear and reuse cached colorBuilders
         For Each sb In CachedColorBuilders.Values
             sb.Clear()
         Next
-        Dim colorBuilders As Dictionary(Of ObjectColor, StringBuilder) = CachedColorBuilders
+        Dim colorBuilders = CachedColorBuilders
 
-        ' Use local dictionaries for parallel processing
         Dim tempObjectsIntersectionDict As New ConcurrentDictionary(Of Integer, IntersectionHistory)()
-        'Dim blockedStructureIds As New ConcurrentDictionary(Of Integer, Byte)()
-        Dim blockingTriangleSetIds As New ConcurrentDictionary(Of Integer, Byte)()
-        Dim coordToColorOverrideObjId As New ConcurrentDictionary(Of (Double, Double, Double), Integer)()
+
+        ' Separate results for WCS and UCS — 
+        Dim wcsResults As New ConcurrentDictionary(Of (Double, Double, Double), ObjectColor)()
+        Dim ucsResults As New ConcurrentDictionary(Of (Double, Double, Double), ObjectColor)()
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         '-----------------------------------------------------------------------
-        ' FRAME PREPARATION — hot-bucket and set-id prep
+        ' FRAME PREPARATION — refill the reused triangle buffer in score order with fresh AABBs;
+        ' rebuilds per-set membership caches only when membershipVersion changed.
         '-----------------------------------------------------------------------
-        ' Purpose: Use scores and hot sets from the PREVIOUS frame to decide
-        ' this frame's set ordering, then clear hot flags so this frame can
-        ' accumulate a fresh set of hot sets.
-        ' Requires: triangleGroups available.
-        ' Produces: pregeneratedSortedSetIds ready for this frame.
-
-
-        ' Reset per-frame debug counters
-        raysThisFrame = 0
-        blocksThisFrame = 0
-        perSetBlocksThisFrame.Clear()
-
-        ' Build per-frame sorted setIds based on decayed scores + last frame's hits.
-        ' Uses global triangleGroups / triangleSetSortScores / hotSetIds.
-        PrepareSortedSetIdsForFrame()
+        PrepareFrameTrianglesAndScoring()
 
         '-----------------------------------------------------------------------
-        ' PARALLEL OBJECT PROCESSING — visibility and intersection per object
+        ' OBSERVER POSITIONS — precompute in both CS — 
         '-----------------------------------------------------------------------
-        ' Purpose: For each object, determine the nearest valid panel intersection
-        ' visible to the observer.
-        ' Requires: structureDrawState, trianglesByIdSnap, panelData, bounds, userCoordinates.
-        ' Produces: tempObjectsIntersectionDict, coordToColorOverrideObjId, blockingTriangleSetIds.
+        Dim obsWCS = (CDbl(userCoordinates.Item1), CDbl(userCoordinates.Item2), CDbl(userCoordinates.Item3))
+        Dim obsUCS = CurrentUCS.ToUCS(obsWCS)
 
+        '-----------------------------------------------------------------------
+        ' VIRTUAL HOLODECK BOUNDS — transform to UCS for interior checks — 
+        '-----------------------------------------------------------------------
+        Dim ucsMin = CurrentUCS.ToUCS((CDbl(HollowMinX), CDbl(HollowMinY), CDbl(HollowMinZ)))
+        Dim ucsMax = CurrentUCS.ToUCS((CDbl(HollowMaxX), CDbl(HollowMaxY), CDbl(HollowMaxZ)))
+        Dim uMinX = Math.Min(ucsMin.Item1, ucsMax.Item1)
+        Dim uMaxX = Math.Max(ucsMin.Item1, ucsMax.Item1)
+        Dim uMinY = Math.Min(ucsMin.Item2, ucsMax.Item2)
+        Dim uMaxY = Math.Max(ucsMin.Item2, ucsMax.Item2)
+        Dim uMinZ = Math.Min(ucsMin.Item3, ucsMax.Item3)
+        Dim uMaxZ = Math.Max(ucsMin.Item3, ucsMax.Item3)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        '-----------------------------------------------------------------------
+        ' WCS OBJECT PROCESSING — original logic, uses cross-system ray check
+        '-----------------------------------------------------------------------
         Parallel.ForEach(objectDictSnap, Sub(objectKvp)
-                                             '-------------------------------------------------------------------
-                                             ' OBJECT PROPERTY EXTRACTION — pull object/user positions
-                                             '-------------------------------------------------------------------
-                                             ' Prerequisites: objectKvp
-                                             ' Responsibility: Extract object coordinates and observer coordinates.
-                                             ' Results: x,y,z (object coords), ux,uy,uz (observer coords), positions.
-
-                                             Dim objectID = objectKvp.Key
                                              Dim obj = objectKvp.Value
 
-                                             Dim x As Long = obj.Location.X
-                                             Dim y As Long = obj.Location.Y
-                                             Dim z As Long = obj.Location.Z
-
-                                             Dim ux As Integer = userCoordinates.Item1
-                                             Dim uy As Integer = userCoordinates.Item2
-                                             Dim uz As Integer = userCoordinates.Item3
-
-                                             Dim objectPos = (CDbl(x), CDbl(y), CDbl(z))
-                                             Dim observerPos = (CDbl(ux), CDbl(uy), CDbl(uz))
-
-                                             '-------------------------------------------------------------------
-                                             ' STRUCTURE VISIBILITY CHECK — skip if structure is off
-                                             '-------------------------------------------------------------------
-                                             ' Prerequisites: object properties
-                                             ' Responsibility: Check if object's structure is toggled visible.
-                                             ' Results: Early exit if structure is not visible.
-
+                                             ' Structure visibility check
                                              Dim structureOnNow As Boolean = True
                                              structureDrawState.TryGetValue(obj.StructureId, structureOnNow)
+                                             If Not structureOnNow Then Return
 
-                                             ' EARLY EXIT: If structure is not on, skip all ray and intersection logic
-                                             If Not structureOnNow Then
-                                                 'blockedStructureIds.TryAdd(obj.StructureId, 0)
-                                                 Return
-                                             End If
+                                             Dim objWCS = (CDbl(obj.Location.X), CDbl(obj.Location.Y), CDbl(obj.Location.Z))
 
-                                             '-------------------------------------------------------------------
-                                             ' RAY OBSTRUCTION CHECK — line-of-sight via triangles
-                                             '-------------------------------------------------------------------
-                                             ' Prerequisites: object and observer positions
-                                             ' Responsibility: Determine if any triangle occludes the ray.
-                                             ' Results: Early exit if blocked (records blocking set ID when present).
+                                             ' Ray obstruction check — MODIFIED: cross-system aware
+                                             If IsRayBlocked(obsWCS, objWCS, obsUCS) Then Return
 
-                                             ' Use the current global triangle data (triangles move each frame).
-                                             ' The frame's ordering (pregeneratedSortedSetIds) was prepared above.
-                                             Dim rayResult = IsRayObscuredByAnyTriangle(observerPos, objectPos)
+                                             ' Interior check and panel intersection
+                                             Dim coord = ComputeFinalCoord(objWCS, obsWCS, bounds, PanelTypeValues, PanelTypeCount)
+                                             If coord.Item1 = Integer.MinValue Then Return
 
-                                             ' EARLY EXIT: If ray is blocked, skip all intersection logic
-                                             If rayResult.Blocked Then
-                                                 'blockedStructureIds.TryAdd(obj.StructureId, 0)
-                                                 If rayResult.BlockedSetId >= 0 Then
-                                                     blockingTriangleSetIds.TryAdd(rayResult.BlockedSetId, 0)
-                                                 End If
-                                                 Return
-                                             End If
-
-                                             '-------------------------------------------------------------------
-                                             ' PANEL INTERSECTION PROCESSING — find best hit
-                                             '-------------------------------------------------------------------
-                                             ' Prerequisites: object is visible and not obscured
-                                             ' Responsibility: Compute candidate panel intersections and pick best.
-                                             ' Results: bestCoord (best intersection point) or early exit.
-
-                                             Dim objCoord As (Integer, Integer, Integer) = (CInt(x), CInt(y), CInt(z))
-                                             Dim observerCoord As (Integer, Integer, Integer) = (ux, uy, uz)
-
-                                             ' Compute panel intersections (no thread-local panel arrays needed)
-                                             Dim result = PanelHelpers.GetHolodecPanelIntersections(observerCoord, objCoord, panelData, PanelTypeCount)
-                                             Dim intersections = result.Item1
-                                             Dim intersectionsValidMask As Integer = result.Item2
-                                             If intersectionsValidMask = 0 Then Return
-
-                                             ' Single-pass evaluation to avoid extra loops and allocations
-                                             Dim distObjToUser As Long =
-                                             CLng(ux - x) * CLng(ux - x) +
-                                             CLng(uy - y) * CLng(uy - y) +
-                                             CLng(uz - z) * CLng(uz - z)
-
-                                             Dim minDistance As Single = Single.MaxValue
-                                             Dim bestCoord = (0, 0, 0)
-                                             Dim foundAny As Boolean = False
-
-                                             For i = 0 To PanelTypeCount - 1
-                                                 If (intersectionsValidMask And (1 << i)) = 0 Then Continue For
-
-                                                 Dim panelType = PanelTypeValues(i)
-                                                 Dim v3 = intersections(i)
-                                                 Dim t = v3.ToTuple()
-
-                                                 ' Pre-round once per candidate
-                                                 Dim rx As Integer = CInt(Math.Round(t.x))
-                                                 Dim ry As Integer = CInt(Math.Round(t.y))
-                                                 Dim rz As Integer = CInt(Math.Round(t.z))
-
-                                                 Dim snappedPoint As (Integer, Integer, Integer)
-                                                 Select Case panelType
-                                                     Case PanelType.TopPanel
-                                                         snappedPoint = (rx, panelData.Top_a.Item2, rz)
-                                                     Case PanelType.BottomPanel
-                                                         snappedPoint = (rx, panelData.Bottom_a.Item2, rz)
-                                                     Case PanelType.NorthPanel
-                                                         snappedPoint = (rx, ry, panelData.North_a.Item3)
-                                                     Case PanelType.SouthPanel
-                                                         snappedPoint = (rx, ry, panelData.South_a.Item3)
-                                                     Case PanelType.EastPanel
-                                                         snappedPoint = (panelData.East_a.Item1, ry, rz)
-                                                     Case PanelType.WestPanel
-                                                         snappedPoint = (panelData.West_a.Item1, ry, rz)
-                                                     Case Else
-                                                         snappedPoint = (rx, ry, rz)
-                                                 End Select
-
-                                                 ' Bounds check per panel type
-                                                 If Not bounds.IsPointWithinPanel(panelType, snappedPoint) Then Continue For
-
-                                                 ' Distance gate (object -> intersection must be <= object -> user)
-                                                 Dim dx As Long = CLng(snappedPoint.Item1) - x
-                                                 Dim dy As Long = CLng(snappedPoint.Item2) - y
-                                                 Dim dz As Long = CLng(snappedPoint.Item3) - z
-                                                 Dim distObjToIntersect As Long = dx * dx + dy * dy + dz * dz
-                                                 If distObjToIntersect > distObjToUser Then Continue For
-
-                                                 ' Candidate passes gating; compute fast distance for tie-breaking
-                                                 Dim dist As Single = CalculateFastDistance((x, y, z), snappedPoint)
-                                                 If dist < minDistance Then
-                                                     minDistance = dist
-                                                     bestCoord = snappedPoint
-                                                     foundAny = True
-                                                 End If
-                                             Next
-
-                                             ' EARLY EXIT: If no points pass all tests
-                                             If Not foundAny Then Return
-
-                                             '-------------------------------------------------------------------
-                                             ' INTERSECTION RECORDING — store hit and color override
-                                             '-------------------------------------------------------------------
-                                             ' Prerequisites: best intersection point found
-                                             ' Responsibility: Record intersection and any color override owner.
-                                             ' Results: tempObjectsIntersectionDict and coordToColorOverrideObjId updated.
-
-                                             Dim objId = obj.UniqIdentifier
-                                             Dim oldRecord As IntersectionHistory
-
-                                             ' Use frozen snapshot of previous intersections from global dict
-                                             If Not objectsIntersectionDict.TryGetValue(objId, oldRecord) Then
-                                                 ' For first-time objects, "previous" == current
-                                                 oldRecord = New IntersectionHistory(
-                                                 (CDbl(bestCoord.Item1), CDbl(bestCoord.Item2), CDbl(bestCoord.Item3)),
-                                                 (CDbl(bestCoord.Item1), CDbl(bestCoord.Item2), CDbl(bestCoord.Item3))
-                                             )
-                                             End If
-
-                                             Dim newCurrent As (Double, Double, Double) =
-                                             (CDbl(bestCoord.Item1), CDbl(bestCoord.Item2), CDbl(bestCoord.Item3))
-
-                                             Dim newRec As New IntersectionHistory(
-                                             newCurrent,
-                                             oldRecord.Current
-                                         )
-
-                                             tempObjectsIntersectionDict(objId) = newRec
-
-                                             If obj.ColorOverride IsNot Nothing Then
-                                                 coordToColorOverrideObjId.TryAdd(newCurrent, obj.UniqIdentifier)
-                                             End If
+                                             ' Record intersection
+                                             RecordResult(obj, coord, tempObjectsIntersectionDict, wcsResults, frameRanks)
                                          End Sub)
+
+        '-----------------------------------------------------------------------
+        ' UCS OBJECT PROCESSING — 
+        ' Objects stored in UCS space, transformed to WCS for panel intersection
+        '-----------------------------------------------------------------------
+        Parallel.ForEach(objectDictSnap_UCS, Sub(objectKvp)
+                                                 Dim obj = objectKvp.Value
+
+                                                 ' Structure visibility check
+                                                 Dim structureOnNow As Boolean = True
+                                                 structureDrawState_UCS.TryGetValue(obj.StructureId, structureOnNow)
+                                                 If Not structureOnNow Then Return
+
+                                                 ' Object coordinates in UCS space
+                                                 Dim objUCS = (CDbl(obj.Location.X), CDbl(obj.Location.Y), CDbl(obj.Location.Z))
+                                                 ' Transform to WCS for panel intersection
+                                                 Dim objWCS = CurrentUCS.ToWCS(objUCS)
+
+                                                 ' Ray obstruction check — cross-system
+                                                 If IsRayBlocked(obsWCS, objWCS, obsUCS) Then Return
+
+                                                 ' Interior check in UCS space (virtual holodeck)
+                                                 Dim isInteriorUCS = objUCS.Item1 > uMinX AndAlso objUCS.Item1 < uMaxX AndAlso
+                               objUCS.Item2 > uMinY AndAlso objUCS.Item2 < uMaxY AndAlso
+                               objUCS.Item3 > uMinZ AndAlso objUCS.Item3 < uMaxZ
+
+                                                 Dim coord As (Integer, Integer, Integer)
+                                                 If isInteriorUCS Then
+                                                     ' Interior: use transformed WCS position directly
+                                                     coord = (CInt(Math.Round(objWCS.Item1)), CInt(Math.Round(objWCS.Item2)), CInt(Math.Round(objWCS.Item3)))
+                                                 Else
+                                                     ' Exterior: compute panel intersection in WCS
+                                                     coord = ComputeFinalCoord(objWCS, obsWCS, bounds, PanelTypeValues, PanelTypeCount)
+                                                     If coord.Item1 = Integer.MinValue Then Return
+                                                 End If
+
+                                                 ' Record intersection
+                                                 RecordResult(obj, coord, tempObjectsIntersectionDict, ucsResults, frameRanks)
+                                             End Sub)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         '-----------------------------------------------------------------------
         ' POST-PROCESSING — merge thread-local intersections
         '-----------------------------------------------------------------------
-        ' Prerequisites: tempObjectsIntersectionDict populated
-        ' Responsibility: Merge parallel results and update shared state
-        ' Results: objectsIntersectionDict updated with merged results
-
         For Each tempIntersectionEntry In tempObjectsIntersectionDict
             objectsIntersectionDict(tempIntersectionEntry.Key) = tempIntersectionEntry.Value
         Next
 
         '-----------------------------------------------------------------------
-        ' COLOR DIFFERENCE ENGINE — minimal per-frame delta output
+        ' COLOR DIFFERENCE ENGINE — WCS priority over UCS
+        ' System precedence, NOT color precedence: WCS always beats UCS at a
+        ' shared cell regardless of scheme. The scheme governed the contest
+        ' WITHIN each system, upstream in RecordResult. Untouched by design.
         '-----------------------------------------------------------------------
-        ' Prerequisites: objectsIntersectionDict populated
-        ' Responsibility: Calculate color deltas vs. previous frame and build output
-        ' Results: String representing only changed/erased coordinates for rendering
+        Dim currentFrameColorDict As Dictionary(Of (Double, Double, Double), ObjectColor)
+        Dim previousFrameColorDict As Dictionary(Of (Double, Double, Double), ObjectColor)
+        Dim currentFrameIsInterior As Dictionary(Of (Double, Double, Double), Boolean)
+        Dim previousFrameIsInterior As Dictionary(Of (Double, Double, Double), Boolean)
 
-        Dim currentFrameColorDict As New Dictionary(Of (Double, Double, Double), ObjectColor)()
+        If useBufferA Then
+            currentFrameColorDict = frameColorDictA
+            previousFrameColorDict = frameColorDictB
+            currentFrameIsInterior = frameIsInteriorA
+            previousFrameIsInterior = frameIsInteriorB
+        Else
+            currentFrameColorDict = frameColorDictB
+            previousFrameColorDict = frameColorDictA
+            currentFrameIsInterior = frameIsInteriorB
+            previousFrameIsInterior = frameIsInteriorA
+        End If
 
-        ' PATCH: Only loop over visible blocks for color assignment!
-        For Each colorEntry In tempObjectsIntersectionDict
-            Dim objId = colorEntry.Key
-            Dim curr = colorEntry.Value.Current
-            Dim forced As ObjectColor? = Nothing
-            Dim forcedObjId As Integer = -1
-            If coordToColorOverrideObjId.TryGetValue(curr, forcedObjId) Then
-                Dim forcedObj As MyObject = Nothing
-                ' Use the frame snapshot for color lookup to keep frame integrity
-                If objectDictSnap.TryGetValue(forcedObjId, forcedObj) Then
-                    forced = forcedObj.ColorOverride
-                End If
-            End If
-            Dim colorToUse As ObjectColor = If(forced.HasValue, forced.Value, ObjectColor.White)
-            currentFrameColorDict(curr) = colorToUse ' Use assignment rather than TryAdd
+        currentFrameColorDict.Clear()
+        currentFrameIsInterior.Clear()
+
+        ' WCS results first (priority) — 
+        For Each kvp In wcsResults
+            currentFrameColorDict(kvp.Key) = kvp.Value
+            Dim cx = CInt(kvp.Key.Item1), cy = CInt(kvp.Key.Item2), cz = CInt(kvp.Key.Item3)
+            currentFrameIsInterior(kvp.Key) = cx > HollowMinX AndAlso cx < HollowMaxX AndAlso
+                                              cy > HollowMinY AndAlso cy < HollowMaxY AndAlso
+                                              cz > HollowMinZ AndAlso cz < HollowMaxZ
         Next
 
-        ' Only output new, erased, or color-changed blocks
+        ' UCS results only where not claimed by WCS — 
+        For Each kvp In ucsResults
+            If Not currentFrameColorDict.ContainsKey(kvp.Key) Then
+                currentFrameColorDict(kvp.Key) = kvp.Value
+                Dim cx = CInt(kvp.Key.Item1), cy = CInt(kvp.Key.Item2), cz = CInt(kvp.Key.Item3)
+                currentFrameIsInterior(kvp.Key) = cx > HollowMinX AndAlso cx < HollowMaxX AndAlso
+                                                  cy > HollowMinY AndAlso cy < HollowMaxY AndAlso
+                                                  cz > HollowMinZ AndAlso cz < HollowMaxZ
+            End If
+        Next
+
+        ' Output new, erased, or color-changed blocks
         For Each currFrameEntry In currentFrameColorDict
             Dim coord = currFrameEntry.Key
             Dim colorNow = currFrameEntry.Value
             Dim colorPrev As ObjectColor = ObjectColor.Black
             Dim hadPrev = previousFrameColorDict.TryGetValue(coord, colorPrev)
             If (Not hadPrev) OrElse (colorPrev <> colorNow) Then
-                colorBuilders(colorNow).Append($"{coord.Item1},{coord.Item2},{coord.Item3};")
+                colorBuilders(colorNow).Append(coord.Item1).Append(","c).Append(coord.Item2).Append(","c).Append(coord.Item3).Append(";"c)
             End If
         Next
 
+        ' Clear disappeared blocks: WhiteDim for interior, Black for panel
         For Each coord In previousFrameColorDict.Keys
             If Not currentFrameColorDict.ContainsKey(coord) Then
-                colorBuilders(ObjectColor.Black).Append($"{coord.Item1},{coord.Item2},{coord.Item3};")
+                Dim wasInterior As Boolean = False
+                previousFrameIsInterior.TryGetValue(coord, wasInterior)
+                If wasInterior Then
+                    colorBuilders(ObjectColor.WhiteDim).Append(coord.Item1).Append(","c).Append(coord.Item2).Append(","c).Append(coord.Item3).Append(";"c)
+                Else
+                    colorBuilders(ObjectColor.Black).Append(coord.Item1).Append(","c).Append(coord.Item2).Append(","c).Append(coord.Item3).Append(";"c)
+                End If
             End If
         Next
 
-        previousFrameColorDict = New Dictionary(Of (Double, Double, Double), ObjectColor)(currentFrameColorDict)
+        ' Swap buffers for next frame
+        useBufferA = Not useBufferA
 
         Return TestBlocksPlusColors(colorBuilders)
     End Function
 
 
 
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' COMPUTE FINAL COORD — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    Private Function ComputeFinalCoord(objPos As (Double, Double, Double), obsWCS As (Double, Double, Double),
+                                       bounds As PanelBounds, panelTypes As PanelType(), panelCount As Integer) As (Integer, Integer, Integer)
+        Dim ix = CInt(objPos.Item1), iy = CInt(objPos.Item2), iz = CInt(objPos.Item3)
+        Dim ux = CInt(obsWCS.Item1), uy = CInt(obsWCS.Item2), uz = CInt(obsWCS.Item3)
+
+        ' Interior check
+        If ix > HollowMinX AndAlso ix < HollowMaxX AndAlso
+           iy > HollowMinY AndAlso iy < HollowMaxY AndAlso
+           iz > HollowMinZ AndAlso iz < HollowMaxZ Then
+            Return (ix, iy, iz)
+        End If
+
+        ' Panel intersection
+        Dim result = PanelHelpers.GetHolodecPanelIntersections((ux, uy, uz), (ix, iy, iz), panelData, panelCount)
+        If result.Item2 = 0 Then Return (Integer.MinValue, 0, 0)
+
+        Dim x = CLng(ix), y = CLng(iy), z = CLng(iz)
+        Dim distToUser As Long = (CLng(ux) - x) * (CLng(ux) - x) + (CLng(uy) - y) * (CLng(uy) - y) + (CLng(uz) - z) * (CLng(uz) - z)
+        Dim minDist = Single.MaxValue
+        Dim best = (Integer.MinValue, 0, 0)
+
+        For i = 0 To panelCount - 1
+            If (result.Item2 And (1 << i)) = 0 Then Continue For
+            Dim t = result.Item1(i).ToTuple()
+            Dim rx = CInt(Math.Round(t.x)), ry = CInt(Math.Round(t.y)), rz = CInt(Math.Round(t.z))
+
+            ' Snap to panel grid
+            Dim snap As (Integer, Integer, Integer)
+            Select Case panelTypes(i)
+                Case PanelType.TopPanel : snap = (rx, panelData.Top_a.Item2, rz)
+                Case PanelType.BottomPanel : snap = (rx, panelData.Bottom_a.Item2, rz)
+                Case PanelType.NorthPanel : snap = (rx, ry, panelData.North_a.Item3)
+                Case PanelType.SouthPanel : snap = (rx, ry, panelData.South_a.Item3)
+                Case PanelType.EastPanel : snap = (panelData.East_a.Item1, ry, rz)
+                Case PanelType.WestPanel : snap = (panelData.West_a.Item1, ry, rz)
+                Case Else : snap = (rx, ry, rz)
+            End Select
+
+            ' Bounds check
+            If Not bounds.IsPointWithinPanel(panelTypes(i), snap) Then Continue For
+
+            ' Distance gate
+            Dim dx = CLng(snap.Item1) - x, dy = CLng(snap.Item2) - y, dz = CLng(snap.Item3) - z
+            If dx * dx + dy * dy + dz * dz > distToUser Then Continue For
+
+            ' Tie-breaking
+            Dim d = CalculateFastDistance((CInt(x), CInt(y), CInt(z)), snap)
+            If d < minDist Then
+                minDist = d
+                best = snap
+            End If
+        Next
+        Return best
+    End Function
+
+    ' Record intersection and color. RANKED CONTEST: when a cell is claimed
+    ' twice within one system's parallel pass, the higher-ranked color wins;
+    ' equal ranks keep first-writer arrival order - the deliberate twinkle.
+    ' WCS-over-UCS priority is untouched: it lives downstream in the merge.
+    Private Sub RecordResult(obj As MyObject, coord As (Integer, Integer, Integer),
+                            intersections As ConcurrentDictionary(Of Integer, IntersectionHistory),
+                            results As ConcurrentDictionary(Of (Double, Double, Double), ObjectColor),
+                            ranks As Integer())
+        Dim c = (CDbl(coord.Item1), CDbl(coord.Item2), CDbl(coord.Item3))
+
+        ' History tracking
+        Dim oldRec As IntersectionHistory
+        If Not objectsIntersectionDict.TryGetValue(obj.UniqIdentifier, oldRec) Then
+            oldRec = New IntersectionHistory(c, c)
+        End If
+        intersections(obj.UniqIdentifier) = New IntersectionHistory(c, oldRec.Current)
+
+        ' Determine this object's true color claim. Out-of-range casts (the
+        ' CType(colorIndex, ObjectColor) seams permit them) fall back to White
+        ' HERE, so only valid colors ever enter results - which makes every
+        ' downstream lookup, ranks and colorBuilders alike, safe by construction.
+        ' Each object carries its OWN color into the contest; the old shared
+        ' override table let a racing writer recolor another's cell, which
+        ' would have the ranks judging a contestant that was never present.
+        Dim color = ObjectColor.White
+        If obj.ColorOverride IsNot Nothing Then
+            Dim oc = CInt(obj.ColorOverride.Value)
+            If oc >= 1 AndAlso oc <= MaxObjectColor Then color = obj.ColorOverride.Value
+        End If
+
+        ' Lock-free ranked upsert: standard CAS loop over the concurrent map.
+        ' TryAdd wins empty cells (rank never consulted - nothing to beat);
+        ' TryUpdate replaces only while the incumbent is what we compared.
+        Do
+            Dim existing As ObjectColor
+            If Not results.TryGetValue(c, existing) Then
+                If results.TryAdd(c, color) Then Return
+                Continue Do   ' lost the empty-cell race; re-read incumbent
+            End If
+
+            ' Bounds-checked rank compare: belt and braces. Because 'color' is
+            ' sanitized above and this method is the sole writer to 'results',
+            ' 'existing' is also valid. The If OPERATOR short-circuits, so
+            ' ranks(ci) is never evaluated when out of range - never rewrite
+            ' these as IIf, which evaluates every argument and would throw.
+            Dim ci = CInt(color)
+            Dim myRank = If(ci >= 1 AndAlso ci <= MaxObjectColor, ranks(ci), 0)
+            Dim ei = CInt(existing)
+            Dim exRank = If(ei >= 1 AndAlso ei <= MaxObjectColor, ranks(ei), 0)
+
+            If myRank <= exRank Then Return   ' <= : ties keep incumbent = twinkle
+
+            If results.TryUpdate(c, color, existing) Then Return
+        Loop   ' incumbent moved under us; contest again
+    End Sub
+
     Public allFrameTuples As New List(Of Tuple(Of StringBuilder, StringBuilder))
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' OUTPUT STRING — 
+    ' ═══════════════════════════════════════════════════════════════════════════
     Private Function TestBlocksPlusColors(colorBuilders As Dictionary(Of ObjectColor, StringBuilder)) As String
-        Dim sb As New StringBuilder()
+        ' Reuse cached StringBuilder
+        Dim sb As StringBuilder = CachedOutputBuilder
+        sb.Clear()
 
         ' we put our idemp flags here
 
@@ -894,8 +1419,18 @@ Public Module Module1
 
 
 
-    Public objectDictionary As New ConcurrentDictionary(Of Integer, MyObject)
-    Public structureObjectIDs As New ConcurrentDictionary(Of Integer, Immutable.ImmutableList(Of Integer))()
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' OBJECT FACTORY — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    ' Add WCS object — 
     Public Function AddMyObjectToFactory(x As Integer, y As Integer, z As Integer, structureId As Integer) As Integer
         Dim key As Integer = GetNextUniqId()
         Dim location As New Coordinates3D(x, y, z)
@@ -913,12 +1448,669 @@ Public Module Module1
                 updated = structureObjectIDs.TryAdd(structureId, newList)
             End If
         Loop
+        Return key
+    End Function
 
+    ' Add UCS object — NEW
+    Public Function AddMyObjectToFactory_UCS(x As Integer, y As Integer, z As Integer, structureId As Integer) As Integer
+        Dim key As Integer = GetNextUniqId()
+        Dim location As New Coordinates3D(x, y, z)
+        Dim obj As New MyObject(location, key, structureId)
+        objectDictionary_UCS.TryAdd(key, obj)
+        structureDrawState_UCS.TryAdd(structureId, True)
+        Dim updated As Boolean = False
+        Do While Not updated
+            Dim currentList As ImmutableList(Of Integer) = Nothing
+            If structureObjectIDs_UCS.TryGetValue(structureId, currentList) Then
+                Dim newList As ImmutableList(Of Integer) = currentList.Add(key)
+                updated = structureObjectIDs_UCS.TryUpdate(structureId, newList, currentList)
+            Else
+                Dim newList As ImmutableList(Of Integer) = ImmutableList.Create(key)
+                updated = structureObjectIDs_UCS.TryAdd(structureId, newList)
+            End If
+        Loop
         Return key
     End Function
 
 
 
+
+
+
+
+
+
+
+
+
+
+    Public uniqId As Integer = 0
+    Function GetNextUniqId() As Integer
+        Return Interlocked.Increment(uniqId)
+    End Function
+
+    Public Function GetMyObjectByStructureId(structureId As Integer) As MyObject
+        Dim obj As MyObject = Nothing
+        objectDictionary.TryGetValue(structureId, obj)
+        Return obj
+    End Function
+
+    Function CalculateFastDistance(point1 As (Integer, Integer, Integer), point2 As (Integer, Integer, Integer)) As Single
+        Dim v1 As New Vector3(point1.Item1, point1.Item2, point1.Item3)
+        Dim v2 As New Vector3(point2.Item1, point2.Item2, point2.Item3)
+        Dim diff As Vector3 = Vector3.Subtract(v2, v1)
+        Return diff.Length()
+    End Function
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' OBSERVER VECTOR DATA — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+    Public observerVectorData As New Dictionary(Of String, Object) From {
+    {"Vector", Nothing},
+    {"Magnitude", Nothing},
+    {"UnitVector", Nothing},
+    {"FromPoint", Nothing},
+    {"ToPoint", Nothing}}
+    ' Method to compute and store all vector info
+    Sub UpdateObserverVectorData(fromPoint As (Integer, Integer, Integer), toPointStr As String)
+        If String.IsNullOrWhiteSpace(toPointStr) Then
+            observerVectorData("Vector") = Nothing
+            observerVectorData("Magnitude") = Nothing
+            observerVectorData("UnitVector") = Nothing
+            observerVectorData("FromPoint") = Nothing
+            observerVectorData("ToPoint") = Nothing
+            Exit Sub
+        End If
+        Dim parts = toPointStr.Split(","c)
+        If parts.Length <> 3 Then Exit Sub
+        Dim toX, toY, toZ As Double
+        If Not Double.TryParse(parts(0), Globalization.NumberStyles.Any, Globalization.CultureInfo.InvariantCulture, toX) Then Exit Sub
+        If Not Double.TryParse(parts(1), Globalization.NumberStyles.Any, Globalization.CultureInfo.InvariantCulture, toY) Then Exit Sub
+        If Not Double.TryParse(parts(2), Globalization.NumberStyles.Any, Globalization.CultureInfo.InvariantCulture, toZ) Then Exit Sub
+
+        Dim toInt = (CInt(Math.Round(toX)), CInt(Math.Round(toY)), CInt(Math.Round(toZ)))
+        Dim vector = New Vector3D(toX - fromPoint.Item1, toY - fromPoint.Item2, toZ - fromPoint.Item3)
+        Dim magTuple = vector.ToTuple()
+        Dim magnitude As Double = Math.Sqrt(magTuple.x * magTuple.x + magTuple.y * magTuple.y + magTuple.z * magTuple.z)
+        Dim unitVector As Vector3D = If(magnitude > 0, New Vector3D(magTuple.x / magnitude, magTuple.y / magnitude, magTuple.z / magnitude), New Vector3D(0, 0, 0))
+
+        observerVectorData("Vector") = vector
+        observerVectorData("Magnitude") = magnitude
+        observerVectorData("UnitVector") = unitVector
+        observerVectorData("FromPoint") = fromPoint
+        observerVectorData("ToPoint") = toInt
+    End Sub
+
+
+    Class Vector3D
+        Private ReadOnly x As Double
+        Private ReadOnly y As Double
+        Private ReadOnly z As Double
+        Sub New(nx As Double, ny As Double, nz As Double)
+            x = nx
+            y = ny
+            z = nz
+        End Sub
+        Public Function Dot(rhs As Vector3D) As Double
+            Return x * rhs.x + y * rhs.y + z * rhs.z
+        End Function
+        Public Shared Operator +(ByVal a As Vector3D, ByVal b As Vector3D) As Vector3D
+            Return New Vector3D(a.x + b.x, a.y + b.y, a.z + b.z)
+        End Operator
+        Public Shared Operator -(ByVal a As Vector3D, ByVal b As Vector3D) As Vector3D
+            Return New Vector3D(a.x - b.x, a.y - b.y, a.z - b.z)
+        End Operator
+        Public Shared Operator *(ByVal a As Vector3D, ByVal b As Double) As Vector3D
+            Return New Vector3D(a.x * b, a.y * b, a.z * b)
+        End Operator
+        Public Overrides Function ToString() As String
+            Return String.Format("{0:F}, {1:F}, {2:F}", x, y, z)
+        End Function
+        Public Function ToIntTuple() As (Integer, Integer, Integer)
+            Return (CInt(Fix(x)), CInt(Fix(y)), CInt(Fix(z)))
+        End Function
+        Public Function ToTuple() As (x As Double, y As Double, z As Double)
+            Return (Math.Round(x, 2), Math.Round(y, 2), Math.Round(z, 2))
+        End Function
+    End Class
+
+    Public Class PanelBounds
+        Private ReadOnly _precalculatedBounds As Dictionary(Of PanelType, (Integer, Integer, Integer, Integer, Integer, Integer))
+
+        Public Sub New()
+            _precalculatedBounds = New Dictionary(Of PanelType, (Integer, Integer, Integer, Integer, Integer, Integer))()
+            For Each panel In panelData.panelsArray
+                _precalculatedBounds.Add(panel.PanelType, CalculateMinMaxBounds(panel.Item2, panel.Item3))
+            Next
+        End Sub
+
+        Private Function CalculateMinMaxBounds(corner1 As (Integer, Integer, Integer), corner2 As (Integer, Integer, Integer)) As (Integer, Integer, Integer, Integer, Integer, Integer)
+            Dim minX As Integer = Math.Min(corner1.Item1, corner2.Item1)
+            Dim maxX As Integer = Math.Max(corner1.Item1, corner2.Item1)
+            Dim minY As Integer = Math.Min(corner1.Item2, corner2.Item2)
+            Dim maxY As Integer = Math.Max(corner1.Item2, corner2.Item2)
+            Dim minZ As Integer = Math.Min(corner1.Item3, corner2.Item3)
+            Dim maxZ As Integer = Math.Max(corner1.Item3, corner2.Item3)
+            Return (minX, maxX, minY, maxY, minZ, maxZ)
+        End Function
+
+        Public Function IsPointWithinPanel(panelType As PanelType, point As (Integer, Integer, Integer)) As Boolean
+            If _precalculatedBounds.ContainsKey(panelType) Then
+                Dim bounds = _precalculatedBounds(panelType)
+                Return (point.Item1 >= bounds.Item1) AndAlso (point.Item1 <= bounds.Item2) AndAlso (point.Item2 >= bounds.Item3) AndAlso (point.Item2 <= bounds.Item4) AndAlso (point.Item3 >= bounds.Item5) AndAlso (point.Item3 <= bounds.Item6)
+            Else
+                Throw New ArgumentException($"Invalid panel type: {panelType}")
+            End If
+        End Function
+    End Class
+
+
+
+
+#Region "Collision"
+
+
+
+
+    Private Sub RebuildMembershipCaches()
+        ' Snapshot each set's triangle ids. This is the only allocating work in the build and it runs
+        ' only on frames where a set was added or removed. Enumeration is safe under concurrent mutation;
+        ' a change racing this rebuild is picked up on the next version bump.
+        cachedSetMembers.Clear()
+        For Each kv In triangleGroups
+            cachedSetMembers(kv.Key) = kv.Value.ToArray()
+        Next
+        If cachedSetIds.Length < cachedSetMembers.Count Then
+            ReDim cachedSetIds(Math.Max(4, cachedSetMembers.Count) - 1)
+        End If
+        Dim i As Integer = 0
+        For Each kv In cachedSetMembers
+            cachedSetIds(i) = kv.Key
+            i += 1
+        Next
+        cachedSetCount = i
+        For j As Integer = 0 To cachedSetCount - 1
+            allSetIds.TryAdd(cachedSetIds(j), 0)
+            triangleSetSortScores.TryAdd(cachedSetIds(j), 0)
+        Next
+    End Sub
+
+
+
+    Private Sub PrepareFrameTrianglesAndScoring()
+        ' Rebuild membership caches only when a triangle set was added or removed.
+        Dim v As Long = Interlocked.Read(membershipVersion)
+        If v <> lastBuiltMembershipVersion Then
+            RebuildMembershipCaches()
+            lastBuiltMembershipVersion = v
+        End If
+
+        ' Decay scores over the cached set ids; clamp at 0.
+        For i As Integer = 0 To cachedSetCount - 1
+            Dim setId As Integer = cachedSetIds(i)
+            Dim oldVal As Integer
+            If triangleSetSortScores.TryGetValue(setId, oldVal) Then
+                triangleSetSortScores(setId) = Math.Max(0, oldVal - SCORE_DECAY_PER_FRAME)
+            End If
+        Next
+
+        ' Frame-local score view. Iterating triangleSetSortScores preserves the prior tie ordering.
+        sortScoresBuffer.Clear()
+        sortedSetIdsBuffer.Clear()
+        For Each kvp In triangleSetSortScores
+            sortScoresBuffer(kvp.Key) = kvp.Value
+        Next
+
+        ' Push sets that did not block last frame to the bottom. hotMark(setId)=hotGen marks a blocker;
+        ' anything not marked in the current generation is cold.
+        Dim g As Integer = hotGen
+        For i As Integer = 0 To cachedSetCount - 1
+            Dim setId As Integer = cachedSetIds(i)
+            Dim mk As Integer
+            If Not (hotMark.TryGetValue(setId, mk) AndAlso mk = g) Then
+                sortScoresBuffer(setId) = Integer.MinValue
+            End If
+        Next
+
+        For Each kvp In sortScoresBuffer
+            sortedSetIdsBuffer.Add(kvp.Key)
+        Next
+        sortedSetIdsBuffer.Sort(Function(a, b)
+                                    Return sortScoresBuffer(b).CompareTo(sortScoresBuffer(a))
+                                End Function)
+
+        ' Live ordered view for the (currently disabled) debug overlay; valid only within this frame.
+        pregeneratedSortedSetIds = sortedSetIdsBuffer
+
+        ' Fill the reused buffer in score order with fresh AABBs. Headroom absorbs triangles added on
+        ' another thread between sizing and fill; an overflow triangle is taken on the next frame.
+        Dim needed As Integer = trianglesById.Count + 16
+        If frameTriangles.Length < needed Then
+            Dim newCap As Integer = Math.Max(needed, Math.Max(4, frameTriangles.Length * 2))
+            ReDim frameTriangles(newCap - 1)
+        End If
+
+        Dim idx As Integer = 0
+        For Each setId In sortedSetIdsBuffer
+            Dim members As Integer() = Nothing
+            If cachedSetMembers.TryGetValue(setId, members) Then
+                For j As Integer = 0 To members.Length - 1
+                    Dim tri As Triangle
+                    If idx < frameTriangles.Length AndAlso trianglesById.TryGetValue(members(j), tri) Then
+                        frameTriangles(idx) = New FrameTriangle(tri)
+                        idx += 1
+                    End If
+                Next
+            End If
+        Next
+        frameTriangleCount = idx
+
+        ' Advance the hot generation instead of clearing a ConcurrentDictionary every frame.
+        hotGen += 1
+    End Sub
+
+    ' Clears the legacy hotSetIds. Hot tracking now lives in hotMark/hotGen, so this clear no longer
+    ' affects which sets sort hot. Retained until external callers are confirmed; safe to remove if none.
+    Public Sub BeginFrameScoring()
+        hotSetIds.Clear()
+    End Sub
+
+    ' Returns the live per-frame order buffer (same reference as sortedSetIdsBuffer). Read it within the
+    ' current frame only; it is cleared and refilled on the next prep. Do not retain it across frames.
+    Public Function GetSortedSetIdsForFrame() As List(Of Integer)
+        Return pregeneratedSortedSetIds
+    End Function
+
+    Public Sub EndOfFrameCleanup()
+        hotSetIds.Clear()
+    End Sub
+
+    ' Called during ray consumption (runs in parallel) when a set blocks. Raises its score and marks it
+    ' hot for next frame by stamping hotMark(setId)=hotGen. Prep treats a set as hot iff its mark equals
+    ' the current hotGen, then advances hotGen; this replaces clearing a per-frame hot set.
+    Private Sub BumpTriangleSetScore_Global(setId As Integer)
+        Dim current As Integer = 0
+        If triangleSetSortScores.TryGetValue(setId, current) Then
+            triangleSetSortScores(setId) = current + SCORE_BUMP_ON_BLOCK
+        Else
+            triangleSetSortScores.TryAdd(setId, SCORE_BUMP_ON_BLOCK)
+        End If
+        hotMark(setId) = hotGen
+    End Sub
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' RAY OCCLUSION
+    ' Iterates frameTriangles[0, frameTriangleCount), choosing the WCS or UCS ray per triangle's
+    ' IsUCS flag. First hit returns, so order is order-independent: set ordering affects speed, not result.
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+
+    ' Build (PrepareFrameTrianglesAndScoring) always completes before this runs in the same
+    ' ProcessData call, so the buffer and count are stable during consumption.
+    Private Function IsRayBlocked(obsWCS As (Double, Double, Double),
+                              targetWCS As (Double, Double, Double),
+                              obsUCS As (Double, Double, Double)) As Boolean
+        Dim tris = frameTriangles
+        Dim count As Integer = frameTriangleCount
+        If count = 0 Then Return False
+
+        Dim dirWCS = (targetWCS.Item1 - obsWCS.Item1, targetWCS.Item2 - obsWCS.Item2, targetWCS.Item3 - obsWCS.Item3)
+        Dim lenWCS = Math.Sqrt(dirWCS.Item1 * dirWCS.Item1 + dirWCS.Item2 * dirWCS.Item2 + dirWCS.Item3 * dirWCS.Item3)
+
+        Dim targetUCS = CurrentUCS.ToUCS(targetWCS)
+        Dim dirUCS = (targetUCS.Item1 - obsUCS.Item1, targetUCS.Item2 - obsUCS.Item2, targetUCS.Item3 - obsUCS.Item3)
+        Dim lenUCS = Math.Sqrt(dirUCS.Item1 * dirUCS.Item1 + dirUCS.Item2 * dirUCS.Item2 + dirUCS.Item3 * dirUCS.Item3)
+
+        For i = 0 To count - 1
+            Dim ft = tris(i)
+            Dim obs, dir As (Double, Double, Double)
+            Dim rayLen As Double
+
+            If ft.Tri.IsUCS Then
+                obs = obsUCS : dir = dirUCS : rayLen = lenUCS
+            Else
+                obs = obsWCS : dir = dirWCS : rayLen = lenWCS
+            End If
+
+            If Not RayIntersectsAABB(obs, dir, (ft.MinX, ft.MinY, ft.MinZ), (ft.MaxX, ft.MaxY, ft.MaxZ)) Then
+                Continue For
+            End If
+
+            If RayIntersectsTriangle(obs, dir, rayLen, ft.Tri) Then
+                BumpTriangleSetScore_Global(ft.Tri.TriangleSetId)
+                Return True
+            End If
+        Next
+        Return False
+    End Function
+
+    ' Möller–Trumbore ray-triangle intersection — 
+    Private Function RayIntersectsTriangle(obs As (Double, Double, Double), dir As (Double, Double, Double),
+                                           len As Double, tri As Triangle) As Boolean
+        If len = 0 Then Return False
+        Dim dirNorm = (dir.Item1 / len, dir.Item2 / len, dir.Item3 / len)
+        Dim v0 = tri.A
+        Dim v1 = tri.B
+        Dim v2 = tri.C
+        Dim eps = 0.00001
+
+        Dim edge1 = (v1.Item1 - v0.Item1, v1.Item2 - v0.Item2, v1.Item3 - v0.Item3)
+        Dim edge2 = (v2.Item1 - v0.Item1, v2.Item2 - v0.Item2, v2.Item3 - v0.Item3)
+        Dim h = Cross(dirNorm, edge2)
+        Dim a = Dot(edge1, h)
+        If Math.Abs(a) < eps Then Return False
+        Dim f = 1.0 / a
+        Dim s = (obs.Item1 - v0.Item1, obs.Item2 - v0.Item2, obs.Item3 - v0.Item3)
+        Dim u = f * Dot(s, h)
+        If u < 0.0 Or u > 1.0 Then Return False
+        Dim q = Cross(s, edge1)
+        Dim v = f * Dot(dirNorm, q)
+        If v < 0.0 Or (u + v) > 1.0 Then Return False
+        Dim t = f * Dot(edge2, q)
+        If t > eps And t < len - eps Then Return True
+        Return False
+    End Function
+
+    ' Fast Ray-AABB intersection using slab method — 
+    Private Function RayIntersectsAABB(rayOrigin As (Double, Double, Double), rayDir As (Double, Double, Double),
+                                       min As (Double, Double, Double), max As (Double, Double, Double)) As Boolean
+        Dim tmin As Double = Double.NegativeInfinity
+        Dim tmax As Double = Double.PositiveInfinity
+
+        For i As Integer = 0 To 2
+            Dim origin As Double, dir As Double, bmin As Double, bmax As Double
+            If i = 0 Then
+                origin = rayOrigin.Item1 : dir = rayDir.Item1 : bmin = min.Item1 : bmax = max.Item1
+            ElseIf i = 1 Then
+                origin = rayOrigin.Item2 : dir = rayDir.Item2 : bmin = min.Item2 : bmax = max.Item2
+            Else
+                origin = rayOrigin.Item3 : dir = rayDir.Item3 : bmin = min.Item3 : bmax = max.Item3
+            End If
+
+            If Math.Abs(dir) < 0.00000001 Then
+                If origin < bmin OrElse origin > bmax Then Return False
+            Else
+                Dim invD = 1.0 / dir
+                Dim t0 = (bmin - origin) * invD
+                Dim t1 = (bmax - origin) * invD
+                If t0 > t1 Then
+                    Dim tmp = t0 : t0 = t1 : t1 = tmp
+                End If
+                tmin = Math.Max(tmin, t0)
+                tmax = Math.Min(tmax, t1)
+                If tmax < tmin Then Return False
+            End If
+        Next
+        Return True
+    End Function
+
+    Private Function Dot(a As (Double, Double, Double), b As (Double, Double, Double)) As Double
+        Return a.Item1 * b.Item1 + a.Item2 * b.Item2 + a.Item3 * b.Item3
+    End Function
+
+    Private Function Cross(a As (Double, Double, Double), b As (Double, Double, Double)) As (Double, Double, Double)
+        Return (a.Item2 * b.Item3 - a.Item3 * b.Item2,
+                a.Item3 * b.Item1 - a.Item1 * b.Item3,
+                a.Item1 * b.Item2 - a.Item2 * b.Item1)
+    End Function
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' TRIANGLE STRUCTURE — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    Public Structure Triangle
+        Public A As (Double, Double, Double)
+        Public B As (Double, Double, Double)
+        Public C As (Double, Double, Double)
+        Public TriangleSetId As Integer
+        Public TriangleId As Integer
+        Public IsUCS As Boolean ' coordinate system ownership
+
+        Public Sub New(ax As Double, ay As Double, az As Double,
+                       bx As Double, by As Double, bz As Double,
+                       cx As Double, cy As Double, cz As Double,
+                       setId As Integer, triangleId As Integer,
+                       isUcs As Boolean)
+            A = (ax, ay, az)
+            B = (bx, by, bz)
+            C = (cx, cy, cz)
+            TriangleSetId = setId
+            Me.TriangleId = triangleId
+            Me.IsUCS = isUcs
+        End Sub
+    End Structure
+
+    ' Startup score seeding only. Does not seed the membership caches; those rebuild lazily on the first
+    ' frame because lastBuiltMembershipVersion starts invalid.
+    Public Sub InitializeSortedSetIds()
+        triangleSetSortScores.Clear()
+        For Each setId In triangleGroups.Keys
+            triangleSetSortScores.TryAdd(setId, 0)
+        Next
+    End Sub
+
+
+    ' One of the two membership mutators: bumps membershipVersion only when a set was actually removed,
+    ' so the build's per-set caches rebuild. Any new removal path must bump the version too.
+    Public Sub RemoveAllTrianglesInSet(setId As Integer)
+        Dim bag As ConcurrentBag(Of Integer) = Nothing
+        Dim removed As Boolean = False
+        If triangleGroups.TryRemove(setId, bag) Then
+            For Each triangleId In bag
+                trianglesById.TryRemove(triangleId, Nothing)
+            Next
+            removed = True
+        End If
+
+        Dim dummyByte As Byte
+        Dim dummyInt As Integer
+
+        sortedSetIds.TryRemove(setId, dummyByte)
+        allSetIds.TryRemove(setId, dummyByte)
+        triangleSetSortScores.TryRemove(setId, dummyInt)
+
+        If removed Then Interlocked.Increment(membershipVersion)
+    End Sub
+
+    ' ═══════════════════════════════════════════════════════════════════════════
+    ' TRIANGLE API — 
+    ' ═══════════════════════════════════════════════════════════════════════════
+
+    ' Add WCS triangle — backward compatible
+    Public Function AddTriangle(
+        ax As Double, ay As Double, az As Double,
+        bx As Double, by As Double, bz As Double,
+        cx As Double, cy As Double, cz As Double,
+        setId As Integer) As Integer
+
+        Return AddTriangleInternal(ax, ay, az, bx, by, bz, cx, cy, cz, setId, False)
+    End Function
+
+    ' Add UCS triangle — 
+    Public Function AddTriangle_UCS(
+        ax As Double, ay As Double, az As Double,
+        bx As Double, by As Double, bz As Double,
+        cx As Double, cy As Double, cz As Double,
+        setId As Integer) As Integer
+
+        Return AddTriangleInternal(ax, ay, az, bx, by, bz, cx, cy, cz, setId, True)
+    End Function
+
+    ' Internal add path (AddTriangle and AddTriangle_UCS both route here). One of the two membership
+    ' mutators: it MUST bump membershipVersion, or the build's per-set caches go stale and occlusion
+    ' silently leaks. Any new add path must do the same.
+    Private Function AddTriangleInternal(
+    ax As Double, ay As Double, az As Double,
+    bx As Double, by As Double, bz As Double,
+    cx As Double, cy As Double, cz As Double,
+    setId As Integer, isUcs As Boolean) As Integer
+
+        Dim triangleId As Integer = GetNextUniqId()
+        Dim t As New Triangle(ax, ay, az, bx, by, bz, cx, cy, cz, setId, triangleId, isUcs)
+        trianglesById.TryAdd(triangleId, t)
+
+        Dim bag As ConcurrentBag(Of Integer) = Nothing
+        If Not triangleGroups.TryGetValue(setId, bag) Then
+            bag = New ConcurrentBag(Of Integer)()
+            triangleGroups.TryAdd(setId, bag)
+        End If
+        bag.Add(triangleId)
+
+        allSetIds.TryAdd(setId, 0)
+        triangleSetSortScores.TryAdd(setId, 0)
+        sortedSetIds.TryAdd(setId, 0)
+
+        Interlocked.Increment(membershipVersion)
+        Return triangleId
+    End Function
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    Public Function GetCellFromWorld(panelData As PanelDataManager, x As Integer, y As Integer, z As Integer) As (Found As Boolean, Panel As PanelType, Row As Integer, Col As Integer)
+
+        Dim searchKey As (Integer, Integer, Integer) = (x, y, z)
+        Dim result As (PanelType, Integer, Integer)
+
+        If panelData.MasterGridLookup.TryGetValue(searchKey, result) Then
+            ' Return True and the found data in one Tuple
+            Return (True, result.Item1, result.Item2, result.Item3)
+        End If
+
+        ' Return False if not found
+        Return (False, Nothing, 0, 0)
+    End Function
+
+
+
+
+
+
+    ' Field to hold the EventAggregator instance
+    Private _eventAggregator As Object = Nothing
+    Private _eventAggregatorAcquired As Boolean = False
+
+    ' Acquire EventAggregator once, stops trying after success
+    Private Sub TryAcquireEventAggregator()
+        If _eventAggregatorAcquired Then Return
+        _eventAggregator = PluginHub.Fetch(Of Object)("EventAggregator")
+        If _eventAggregator IsNot Nothing Then
+            _eventAggregatorAcquired = True
+        End If
+    End Sub
+
+    ' Helper for invoking EventAggregator methods
+    Private Function CallEventAggregator(methodName As String, ParamArray args() As Object) As Object
+        If _eventAggregator Is Nothing Then Return Nothing
+
+        Dim mi = _eventAggregator.GetType().GetMethod(methodName)
+        If mi IsNot Nothing Then
+            Return mi.Invoke(_eventAggregator, args)
+        Else
+            Console.WriteLine("Method '" & methodName & "' not found on EventAggregator.")
+            Return Nothing
+        End If
+    End Function
 
 
 
@@ -1146,44 +2338,6 @@ Public Module Module1
 
 
 
-
-
-
-
-
-
-    Public uniqId As Integer = 0
-    Function GetNextUniqId() As Integer
-        Return Interlocked.Increment(uniqId)
-    End Function
-
-    Public Function GetMyObjectByStructureId(structureId As Integer) As MyObject
-        Dim obj As MyObject = Nothing
-        objectDictionary.TryGetValue(structureId, obj)
-        Return obj
-    End Function
-
-
-    Function CalculateFastDistance(point1 As (Integer, Integer, Integer), point2 As (Integer, Integer, Integer)) As Single
-        Dim v1 As New Vector3(point1.Item1, point1.Item2, point1.Item3)
-        Dim v2 As New Vector3(point2.Item1, point2.Item2, point2.Item3)
-        Dim diff As Vector3 = Vector3.Subtract(v2, v1)
-        Return diff.Length()
-    End Function
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Public Sub HandleMCCommand(apiImpl As ICurrentApi,
                            pluginManager As PluginManager,
                            marginMgr As Margins.MarginManager)
@@ -1219,225 +2373,6 @@ Public Module Module1
         End Select
     End Sub
 
-
-    'Public Sub HandleMCCommand_2_(apiImpl As ICurrentApi,
-    '                       pluginManager As PluginManager,
-    '                       marginMgr As Margins.MarginManager)
-
-    '    Dim pluginOrKeyword As String = Nothing
-
-    '    If Not CommandConfig.TryGetPluginForCommand(mccommand, pluginOrKeyword) Then
-    '        ' Unknown command; user hasn't defined it in [Commands]
-    '        Exit Sub
-    '    End If
-
-    '    Select Case pluginOrKeyword
-    '        Case "_builtin_list_plugins"
-    '            pluginManager.ListAvailablePlugins()
-    '            Exit Sub
-
-    '        Case "_builtin_list_margins"
-    '            PrintAllMargins(marginMgr)
-    '            Exit Sub
-
-    '        Case "_builtin_run_cube"
-    '            pluginManager.RunPluginByNameOnThread("Satellite Cubes Plugin", apiImpl)
-
-    '            Thread.Sleep(500)
-    '            ' Example: Keep more up close, with a strong bias (1.5), 10 bands, keep all within 500 units
-    '            Console.WriteLine(objectDictionary.Count)
-    '            ThinEvenSpatiallyAdaptiveAuto(objectDictionary, thinnedDict, 35000, userCoordinates, 200, 20, 20)
-    '            Console.WriteLine(objectDictionary.Count)
-    '            Console.WriteLine("ini builtin")
-
-    '        Case Else
-    '            ' Treat as plugin name (must match PluginMetadata.Name)
-    '            pluginManager.RunPluginByNameOnThread(pluginOrKeyword, apiImpl)
-    '    End Select
-    'End Sub
-
-
-    ''Sub HandleMCCommand(zone As SpatialZone, apiImpl As ICurrentApi, pluginManager As PluginManager, marginMgr As Margins.MarginManager)
-    'Sub HandleMCCommand_old_(apiImpl As ICurrentApi, pluginManager As PluginManager, marginMgr As Margins.MarginManager)
-    '    Select Case mccommand
-    '        Case "dummy data"
-    '            ' Do nothing
-    '            'Console.WriteLine(mccommand)
-    '        Case "list plugins"
-    '            pluginManager.ListAvailablePlugins()
-    '        Case "events"
-    '            pluginManager.RunPluginByNameOnThread("Event Aggregator", apiImpl)
-    '            'pluginManager.RunAllPluginsOnThreads(apiImpl)
-
-    '        Case "menu system"
-    '            pluginManager.RunPluginByNameOnThread("Menu System", apiImpl)
-    '        Case "test menu"
-    '            pluginManager.RunPluginByNameOnThread("Menu System Consumer", apiImpl)
-
-    '        Case "run cube"
-    '            pluginManager.RunPluginByNameOnThread("Satellite Cubes Plugin", apiImpl)
-
-    '            Thread.Sleep(500)
-    '            ' Example: Keep more up close, with a strong bias (1.5), 10 bands, keep all within 500 units
-    '            Console.WriteLine(objectDictionary.Count)
-    '            ThinEvenSpatiallyAdaptiveAuto(objectDictionary, thinnedDict, 35000, userCoordinates, 200, 20, 20)
-    '            Console.WriteLine(objectDictionary.Count)
-
-    '        Case "test mouseover"
-    '            pluginManager.RunPluginByNameOnThread("Spatial Zone Mouse Test", apiImpl)
-    '        Case "points"
-    '            pluginManager.RunPluginByNameOnThread("Hollow Shell Generator", apiImpl)
-
-    '        Case "list margins"
-    '            PrintAllMargins(marginMgr)
-    '            'Case "clearsz"
-    '            '    Console.WriteLine(mccommand)
-    '            '    zone.RemoveAllZoneObjects()
-    '            '    mccommand = "dummy data"
-    '            'Case "north set"
-    '            '    zone.SwapMargenSetNorth()
-    '            '    mccommand = "dummy data"
-    '            'Case "east set"
-    '            '    zone.SwapMargenSetEast()
-    '            '    mccommand = "dummy data"
-    '            'Case "south set"
-    '            '    zone.SwapMargenSetSouth()
-    '            '    mccommand = "dummy data"
-    '            'Case "west set"
-    '            '    zone.SwapMargenSetWest()
-    '            '    mccommand = "dummy data"
-    '            'Case "top set"
-    '            '    zone.SwapMargenSetTop()
-    '            '    mccommand = "dummy data"
-    '            'Case "bottom set"
-    '            '    zone.SwapMargenSetBottom()
-    '            '    mccommand = "dummy data"
-    '            'Case "move margin"
-    '            '    marginMgr.MarginJump("NorthSetRight", PanelType.NorthPanel, Nothing, 160)
-    '            '    zone.SwapMargenSetNorth()
-    '            '    mccommand = "dummy data"
-    '            'Case "move margin2"
-    '            '    marginMgr.MarginJump("NorthSetRight", PanelType.NorthPanel, Nothing, 100)
-    '            '    zone.SwapMargenSetNorth()
-    '            '    mccommand = "dummy data"
-    '        Case Else
-    '            ' You can add more commands here in the future
-    '    End Select
-    'End Sub
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    Public observerVectorData As New Dictionary(Of String, Object) From {
-    {"Vector", Nothing},
-    {"Magnitude", Nothing},
-    {"UnitVector", Nothing},
-    {"FromPoint", Nothing},
-    {"ToPoint", Nothing}}
-    ' Method to compute and store all vector info
-    Sub UpdateObserverVectorData(fromPoint As (Integer, Integer, Integer), toPointStr As String)
-        If String.IsNullOrWhiteSpace(toPointStr) Then
-            observerVectorData("Vector") = Nothing
-            observerVectorData("Magnitude") = Nothing
-            observerVectorData("UnitVector") = Nothing
-            observerVectorData("FromPoint") = Nothing
-            observerVectorData("ToPoint") = Nothing
-            Exit Sub
-        End If
-        Dim parts = toPointStr.Split(","c)
-        If parts.Length <> 3 Then Exit Sub
-        Dim toX, toY, toZ As Double
-        If Not Double.TryParse(parts(0), Globalization.NumberStyles.Any, Globalization.CultureInfo.InvariantCulture, toX) Then Exit Sub
-        If Not Double.TryParse(parts(1), Globalization.NumberStyles.Any, Globalization.CultureInfo.InvariantCulture, toY) Then Exit Sub
-        If Not Double.TryParse(parts(2), Globalization.NumberStyles.Any, Globalization.CultureInfo.InvariantCulture, toZ) Then Exit Sub
-
-        Dim toInt = (CInt(Math.Round(toX)), CInt(Math.Round(toY)), CInt(Math.Round(toZ)))
-        Dim vector = New Vector3D(toX - fromPoint.Item1, toY - fromPoint.Item2, toZ - fromPoint.Item3)
-        Dim magTuple = vector.ToTuple()
-        Dim magnitude As Double = Math.Sqrt(magTuple.x * magTuple.x + magTuple.y * magTuple.y + magTuple.z * magTuple.z)
-        Dim unitVector As Vector3D = If(magnitude > 0, New Vector3D(magTuple.x / magnitude, magTuple.y / magnitude, magTuple.z / magnitude), New Vector3D(0, 0, 0))
-
-        observerVectorData("Vector") = vector
-        observerVectorData("Magnitude") = magnitude
-        observerVectorData("UnitVector") = unitVector
-        observerVectorData("FromPoint") = fromPoint
-        observerVectorData("ToPoint") = toInt
-    End Sub
-
-
-    Class Vector3D
-        Private ReadOnly x As Double
-        Private ReadOnly y As Double
-        Private ReadOnly z As Double
-        Sub New(nx As Double, ny As Double, nz As Double)
-            x = nx
-            y = ny
-            z = nz
-        End Sub
-        Public Function Dot(rhs As Vector3D) As Double
-            Return x * rhs.x + y * rhs.y + z * rhs.z
-        End Function
-        Public Shared Operator +(ByVal a As Vector3D, ByVal b As Vector3D) As Vector3D
-            Return New Vector3D(a.x + b.x, a.y + b.y, a.z + b.z)
-        End Operator
-        Public Shared Operator -(ByVal a As Vector3D, ByVal b As Vector3D) As Vector3D
-            Return New Vector3D(a.x - b.x, a.y - b.y, a.z - b.z)
-        End Operator
-        Public Shared Operator *(ByVal a As Vector3D, ByVal b As Double) As Vector3D
-            Return New Vector3D(a.x * b, a.y * b, a.z * b)
-        End Operator
-        Public Overrides Function ToString() As String
-            Return String.Format("{0:F}, {1:F}, {2:F}", x, y, z)
-        End Function
-        Public Function ToIntTuple() As (Integer, Integer, Integer)
-            Return (CInt(Fix(x)), CInt(Fix(y)), CInt(Fix(z)))
-        End Function
-        Public Function ToTuple() As (x As Double, y As Double, z As Double)
-            Return (Math.Round(x, 2), Math.Round(y, 2), Math.Round(z, 2))
-        End Function
-    End Class
-
-    Public Class PanelBounds
-        Private ReadOnly _precalculatedBounds As Dictionary(Of PanelType, (Integer, Integer, Integer, Integer, Integer, Integer))
-
-        Public Sub New()
-            _precalculatedBounds = New Dictionary(Of PanelType, (Integer, Integer, Integer, Integer, Integer, Integer))()
-            For Each panel In panelData.panelsArray
-                _precalculatedBounds.Add(panel.PanelType, CalculateMinMaxBounds(panel.Item2, panel.Item3))
-            Next
-        End Sub
-
-        Private Function CalculateMinMaxBounds(corner1 As (Integer, Integer, Integer), corner2 As (Integer, Integer, Integer)) As (Integer, Integer, Integer, Integer, Integer, Integer)
-            Dim minX As Integer = Math.Min(corner1.Item1, corner2.Item1)
-            Dim maxX As Integer = Math.Max(corner1.Item1, corner2.Item1)
-            Dim minY As Integer = Math.Min(corner1.Item2, corner2.Item2)
-            Dim maxY As Integer = Math.Max(corner1.Item2, corner2.Item2)
-            Dim minZ As Integer = Math.Min(corner1.Item3, corner2.Item3)
-            Dim maxZ As Integer = Math.Max(corner1.Item3, corner2.Item3)
-            Return (minX, maxX, minY, maxY, minZ, maxZ)
-        End Function
-
-        Public Function IsPointWithinPanel(panelType As PanelType, point As (Integer, Integer, Integer)) As Boolean
-            If _precalculatedBounds.ContainsKey(panelType) Then
-                Dim bounds = _precalculatedBounds(panelType)
-                Return (point.Item1 >= bounds.Item1) AndAlso (point.Item1 <= bounds.Item2) AndAlso (point.Item2 >= bounds.Item3) AndAlso (point.Item2 <= bounds.Item4) AndAlso (point.Item3 >= bounds.Item5) AndAlso (point.Item3 <= bounds.Item6)
-            Else
-                Throw New ArgumentException($"Invalid panel type: {panelType}")
-            End If
-        End Function
-    End Class
 
 
 
@@ -1512,346 +2447,6 @@ Public Module Module1
     End Function
 
 
-#Region "Collision"
-
-
-
-
-    ' Ensure all setIds that exist in triangleGroups are tracked in allSetIds and triangleSetSortScores
-    Private Sub AddAllSetIdsFromTriangleGroups()
-        For Each setId In triangleGroups.Keys
-            allSetIds.TryAdd(setId, 0)
-            triangleSetSortScores.TryAdd(setId, 0)
-        Next
-    End Sub
-
-    ' Called once per frame, BEFORE Parallel.ForEach over objects.
-    ' 1) Ensure all setIds are registered.
-    ' 2) Apply per-frame decay to triangleSetSortScores (clamped at 0).
-    ' 3) Build a sorted list of setIds into pregeneratedSortedSetIds using reusable buffers.
-    Public Sub PrepareSortedSetIdsForFrame()
-        ' Step 1: ensure all sets are known (if triangles added between frames)
-        AddAllSetIdsFromTriangleGroups()
-
-        ' Step 2: apply decay and clamp at 0
-        Dim setIdsSnapshot As New List(Of Integer)(allSetIds.Keys)
-        For Each setId As Integer In setIdsSnapshot
-            Dim oldVal As Integer
-            If triangleSetSortScores.TryGetValue(setId, oldVal) Then
-                Dim newVal As Integer = oldVal - SCORE_DECAY_PER_FRAME
-                If newVal < 0 Then
-                    newVal = 0
-                End If
-                triangleSetSortScores(setId) = newVal
-            Else
-                triangleSetSortScores.TryAdd(setId, 0)
-            End If
-        Next
-
-        ' Step 3: prepare frame-local sorted list (reusing buffers)
-        sortScoresBuffer.Clear()
-        sortedSetIdsBuffer.Clear()
-
-        ' Snapshot scores into buffer
-        For Each kvp As KeyValuePair(Of Integer, Integer) In triangleSetSortScores
-            sortScoresBuffer(kvp.Key) = kvp.Value
-        Next
-
-        ' Push sets that did NOT block this frame down to the bottom
-        Dim lowestScore As Integer = Integer.MinValue
-        For Each setId As Integer In allSetIds.Keys
-            If Not hotSetIds.ContainsKey(setId) Then
-                sortScoresBuffer(setId) = lowestScore
-            End If
-        Next
-
-
-
-
-
-        ' Debug: snapshot the exact scores used for sorting this frame
-        sortScoresDebugSnapshot.Clear()
-        For Each kvp As KeyValuePair(Of Integer, Integer) In sortScoresBuffer
-            sortScoresDebugSnapshot(kvp.Key) = kvp.Value
-        Next
-
-
-
-
-
-
-        ' Sort keys by score descending into reusable list
-        For Each kvp As KeyValuePair(Of Integer, Integer) In sortScoresBuffer
-            sortedSetIdsBuffer.Add(kvp.Key)
-        Next
-
-        sortedSetIdsBuffer.Sort(
-        Function(a As Integer, b As Integer)
-            Dim sa As Integer = sortScoresBuffer(a)
-            Dim sb As Integer = sortScoresBuffer(b)
-            ' descending
-            Return sb.CompareTo(sa)
-        End Function)
-
-        ' Assign to pregeneratedSortedSetIds (this list is used read-only during the frame)
-        pregeneratedSortedSetIds = New List(Of Integer)(sortedSetIdsBuffer)
-    End Sub
-
-    ' Call this at the very start of each frame, on the main thread,
-    ' BEFORE starting Parallel.ForEach. It clears any leftover hot flags.
-    Public Sub BeginFrameScoring()
-        hotSetIds.Clear()
-    End Sub
-
-    Public Function GetSortedSetIdsForFrame() As List(Of Integer)
-        Return pregeneratedSortedSetIds
-    End Function
-
-    ' Clear per-frame hot flags AFTER frame processing is done.
-    ' Call this ONCE per frame, after Parallel.ForEach.
-    Public Sub EndOfFrameCleanup()
-        hotSetIds.Clear()
-    End Sub
-
-
-    ' Bump a set's score when it actually blocks a ray (global, no lambdas).
-    Private Sub BumpTriangleSetScore_Global(setId As Integer)
-        Dim current As Integer = 0
-        If triangleSetSortScores.TryGetValue(setId, current) Then
-            Dim newVal As Integer = current + SCORE_BUMP_ON_BLOCK
-            triangleSetSortScores(setId) = newVal
-        Else
-            triangleSetSortScores.TryAdd(setId, SCORE_BUMP_ON_BLOCK)
-        End If
-
-        hotSetIds.TryAdd(setId, 0)
-
-
-        ' Debug: count how many times this set blocked in this frame
-        SyncLock perSetBlocksThisFrame
-            Dim c As Integer = 0
-            If perSetBlocksThisFrame.TryGetValue(setId, c) Then
-                perSetBlocksThisFrame(setId) = c + 1
-            Else
-                perSetBlocksThisFrame(setId) = 1
-            End If
-        End SyncLock
-
-        ' Debug: count total blocks this frame
-        Interlocked.Increment(blocksThisFrame)
-
-    End Sub
-
-
-
-    Public Function IsRayObscuredByAnyTriangle(
-    observer As (Double, Double, Double),
-    target As (Double, Double, Double)) As (Blocked As Boolean, BlockedSetId As Integer)
-
-
-        ' Count how many rays we cast this frame (debug only)
-        Interlocked.Increment(raysThisFrame)
-
-
-        ' Compute ray direction ONCE per call (per object)
-        Dim rayDir As (Double, Double, Double) = (
-        target.Item1 - observer.Item1,
-        target.Item2 - observer.Item2,
-        target.Item3 - observer.Item3
-    )
-
-        ' Decide set order for this frame
-        Dim setsToCheck As IEnumerable(Of Integer)
-        Dim sortedSetIdsList As List(Of Integer) = GetSortedSetIdsForFrame()
-        If sortedSetIdsList IsNot Nothing AndAlso sortedSetIdsList.Count > 0 Then
-            setsToCheck = sortedSetIdsList
-        Else
-            setsToCheck = triangleGroups.Keys
-        End If
-
-        For Each setId As Integer In setsToCheck
-            Dim triangleIds As ConcurrentBag(Of Integer) = Nothing
-            If triangleGroups.TryGetValue(setId, triangleIds) Then
-                For Each triangleId As Integer In triangleIds
-                    Dim triangle As Triangle
-                    If trianglesById.TryGetValue(triangleId, triangle) Then
-                        ' --- AABB SHORT-CIRCUIT ---
-                        ' Compute per-frame triangle AABB (triangles move each frame)
-                        Dim minX As Double = Math.Min(triangle.A.Item1, Math.Min(triangle.B.Item1, triangle.C.Item1))
-                        Dim minY As Double = Math.Min(triangle.A.Item2, Math.Min(triangle.B.Item2, triangle.C.Item2))
-                        Dim minZ As Double = Math.Min(triangle.A.Item3, Math.Min(triangle.B.Item3, triangle.C.Item3))
-                        Dim maxX As Double = Math.Max(triangle.A.Item1, Math.Max(triangle.B.Item1, triangle.C.Item1))
-                        Dim maxY As Double = Math.Max(triangle.A.Item2, Math.Max(triangle.B.Item2, triangle.C.Item2))
-                        Dim maxZ As Double = Math.Max(triangle.A.Item3, Math.Max(triangle.B.Item3, triangle.C.Item3))
-
-                        If Not RayIntersectsAABB(observer, rayDir, (minX, minY, minZ), (maxX, maxY, maxZ)) Then
-                            ' Ray can't reach this triangle; skip precise intersection math
-                            Continue For
-                        End If
-
-                        ' Precise ray/triangle intersection
-                        If RayIntersectsTriangle(observer, target, triangle) Then
-                            ' Bump score since THIS set actually blocked the ray
-                            BumpTriangleSetScore_Global(setId)
-                            Return (True, setId)
-                        End If
-                    End If
-                Next
-            End If
-        Next
-
-        Return (False, -1)
-    End Function
-
-    Public Function RayIntersectsTriangle(observer As (Double, Double, Double), target As (Double, Double, Double), tri As Triangle) As Boolean
-        Dim orig = observer
-        Dim dir = (target.Item1 - observer.Item1, target.Item2 - observer.Item2, target.Item3 - observer.Item3)
-        Dim len = Math.Sqrt(dir.Item1 * dir.Item1 + dir.Item2 * dir.Item2 + dir.Item3 * dir.Item3)
-        If len = 0 Then Return False
-        Dim dirNorm = (dir.Item1 / len, dir.Item2 / len, dir.Item3 / len)
-        Dim v0 = tri.A
-        Dim v1 = tri.B
-        Dim v2 = tri.C
-        Dim eps = 0.00001
-
-        ' Edges
-        Dim edge1 = (v1.Item1 - v0.Item1, v1.Item2 - v0.Item2, v1.Item3 - v0.Item3)
-        Dim edge2 = (v2.Item1 - v0.Item1, v2.Item2 - v0.Item2, v2.Item3 - v0.Item3)
-        Dim h = Cross(dirNorm, edge2)
-        Dim a = Dot(edge1, h)
-        If Math.Abs(a) < eps Then Return False ' Parallel
-        Dim f = 1.0 / a
-        Dim s = (orig.Item1 - v0.Item1, orig.Item2 - v0.Item2, orig.Item3 - v0.Item3)
-        Dim u = f * Dot(s, h)
-        If u < 0.0 Or u > 1.0 Then Return False
-        Dim q = Cross(s, edge1)
-        Dim v = f * Dot(dirNorm, q)
-        If v < 0.0 Or (u + v) > 1.0 Then Return False
-        Dim t = f * Dot(edge2, q)
-        If t > eps And t < len - eps Then Return True
-        Return False
-    End Function
-
-
-    ' Fast Ray-AABB intersection using the slab method
-    Private Function RayIntersectsAABB(rayOrigin As (Double, Double, Double), rayDir As (Double, Double, Double), min As (Double, Double, Double), max As (Double, Double, Double)) As Boolean
-        Dim tmin As Double = Double.NegativeInfinity
-        Dim tmax As Double = Double.PositiveInfinity
-
-        For i As Integer = 0 To 2
-            Dim origin As Double, dir As Double, bmin As Double, bmax As Double
-            If i = 0 Then
-                origin = rayOrigin.Item1 : dir = rayDir.Item1 : bmin = min.Item1 : bmax = max.Item1
-            ElseIf i = 1 Then
-                origin = rayOrigin.Item2 : dir = rayDir.Item2 : bmin = min.Item2 : bmax = max.Item2
-            Else
-                origin = rayOrigin.Item3 : dir = rayDir.Item3 : bmin = min.Item3 : bmax = max.Item3
-            End If
-
-            If Math.Abs(dir) < 0.00000001 Then
-                If origin < bmin OrElse origin > bmax Then Return False
-            Else
-                Dim invD = 1.0 / dir
-                Dim t0 = (bmin - origin) * invD
-                Dim t1 = (bmax - origin) * invD
-                If t0 > t1 Then
-                    Dim tmp = t0 : t0 = t1 : t1 = tmp
-                End If
-                tmin = Math.Max(tmin, t0)
-                tmax = Math.Min(tmax, t1)
-                If tmax < tmin Then Return False
-            End If
-        Next
-        Return True
-    End Function
-
-
-    Private Function Dot(a As (Double, Double, Double), b As (Double, Double, Double)) As Double
-        Return a.Item1 * b.Item1 + a.Item2 * b.Item2 + a.Item3 * b.Item3
-    End Function
-    Private Function Cross(a As (Double, Double, Double), b As (Double, Double, Double)) As (Double, Double, Double)
-        Return (
-            a.Item2 * b.Item3 - a.Item3 * b.Item2,
-            a.Item3 * b.Item1 - a.Item1 * b.Item3,
-            a.Item1 * b.Item2 - a.Item2 * b.Item1)
-    End Function
-
-
-    Public Structure Triangle
-        Public A As (Double, Double, Double)
-        Public B As (Double, Double, Double)
-        Public C As (Double, Double, Double)
-        Public TriangleSetId As Integer
-        Public TriangleId As Integer
-
-        Public Sub New(ax As Double, ay As Double, az As Double,
-                   bx As Double, by As Double, bz As Double,
-                   cx As Double, cy As Double, cz As Double,
-                   setId As Integer, triangleId As Integer)
-            A = (ax, ay, az)
-            B = (bx, by, bz)
-            C = (cx, cy, cz)
-            TriangleSetId = setId
-            Me.TriangleId = triangleId
-        End Sub
-    End Structure
-
-
-
-
-    Public Sub InitializeSortedSetIds()
-        triangleSetSortScores.Clear()
-        For Each setId In triangleGroups.Keys
-            triangleSetSortScores.TryAdd(setId, 0)
-        Next
-    End Sub
-
-
-
-
-    Public Sub RemoveAllTrianglesInSet(setId As Integer)
-        Dim bag As ConcurrentBag(Of Integer) = Nothing
-        If triangleGroups.TryRemove(setId, bag) Then
-            For Each triangleId In bag
-                trianglesById.TryRemove(triangleId, Nothing)
-            Next
-        End If
-
-        Dim dummyByte As Byte
-        Dim dummyInt As Integer
-
-        sortedSetIds.TryRemove(setId, dummyByte)
-        allSetIds.TryRemove(setId, dummyByte)
-        triangleSetSortScores.TryRemove(setId, dummyInt)
-    End Sub
-
-
-    Public Function AddTriangle(
-    ax As Double, ay As Double, az As Double,
-    bx As Double, by As Double, bz As Double,
-    cx As Double, cy As Double, cz As Double,
-    setId As Integer) As Integer
-
-        Dim triangleId As Integer = GetNextUniqId()
-        Dim t As New Triangle(ax, ay, az, bx, by, bz, cx, cy, cz, setId, triangleId)
-        trianglesById.TryAdd(triangleId, t)
-
-        Dim bag As ConcurrentBag(Of Integer) = Nothing
-        If Not triangleGroups.TryGetValue(setId, bag) Then
-            bag = New ConcurrentBag(Of Integer)()
-            triangleGroups.TryAdd(setId, bag)
-        End If
-        bag.Add(triangleId)
-
-        ' Track this setId in the hot-bucket system
-        allSetIds.TryAdd(setId, 0)
-        triangleSetSortScores.TryAdd(setId, 0)
-        sortedSetIds.TryAdd(setId, 0)
-
-        Return triangleId
-    End Function
-
-
 
 
 
@@ -1863,13 +2458,6 @@ Public Module Module1
     Private raysThisFrame As Long = 0
     Private blocksThisFrame As Long = 0
     Private perSetBlocksThisFrame As New Dictionary(Of Integer, Integer)()
-
-
-
-
-
-
-
 
     Private Sub RenderTriangleSortDebugOverlay()
         ' -----------------------------------------------------------------------
@@ -2086,6 +2674,19 @@ End Module
 
 Public Class PanelDataManager
 
+
+
+    ' The Master Map:
+    ' Key = (x, y, z) Coordinate in 3D space
+    ' Value = (PanelType, Row, Col)
+    Public MasterGridLookup As Dictionary(Of (Integer, Integer, Integer), (PanelType, Integer, Integer))
+
+
+
+
+
+
+
     ' These arrays describe the panels of the cube as tuples of corner coordinates
     Public panelsArray() As (PanelType As PanelType, FirstTuple As (Integer, Integer, Integer), SecondTuple As (Integer, Integer, Integer))
     Public panelNormalsArray() As (PanelType As PanelType, Normal As (Integer, Integer, Integer), SecondTuple As (Integer, Integer, Integer))
@@ -2144,8 +2745,64 @@ Public Class PanelDataManager
         CenterCoordinates = (centerX, centerY, centerZ)
         populateCorners(CenterCoordinates)
         PrecomputeAllPanelGrids()
+
+
+
+
+        BuildMasterGridLookup()
+
+
+
+
+
         PopulatePanelInfo()
     End Sub
+
+
+
+
+
+
+
+
+
+
+
+    Private Sub BuildMasterGridLookup()
+        MasterGridLookup = New Dictionary(Of (Integer, Integer, Integer), (PanelType, Integer, Integer))()
+
+        ' Define all grids in one clean list to avoid repetitive code
+        Dim allGrids As New List(Of (PanelType, Dictionary(Of (Integer, Integer), (Integer, Integer, Integer)))) From {
+        (PanelType.TopPanel, TopPanelGrid),
+        (PanelType.BottomPanel, BottomPanelGrid),
+        (PanelType.NorthPanel, NorthPanelGrid),
+        (PanelType.SouthPanel, SouthPanelGrid),
+        (PanelType.EastPanel, EastPanelGrid),
+        (PanelType.WestPanel, WestPanelGrid)
+    }
+
+        ' Populate the master dictionary
+        For Each mapping In allGrids
+            Dim pType = mapping.Item1
+            Dim grid = mapping.Item2
+
+            For Each kvp In grid
+                ' Key is the World Coordinate, Value is the full cell data
+                MasterGridLookup(kvp.Value) = (pType, kvp.Key.Item1, kvp.Key.Item2)
+            Next
+        Next
+    End Sub
+
+
+
+
+
+
+
+
+
+
+
 
     'Public Sub New_old2_()
     '    Dim baseDir As String = AppContext.BaseDirectory
@@ -2709,7 +3366,6 @@ Public Module ThinningDebugHelpers
     End Sub
 
 End Module
-
 
 
 
