@@ -1,4 +1,6 @@
-﻿Imports System.Collections.Concurrent
+﻿' Program.vb
+
+Imports System.Collections.Concurrent
 Imports System.Collections.Immutable
 Imports System.IO
 Imports System.Net
@@ -108,11 +110,40 @@ Public Module Module1
     Public userCoordinates As (Integer, Integer, Integer) = (-250, 155, -78) '(-250, 155, -78)    -250    73  -78 
     Public observedLocation As String = "-370,73,-200"
 
-    Public spatialZoneDict As New Dictionary(Of String, SpatialZone)
+    ' Concurrent because OnMarginChanged below walks this while a plugin thread
+    ' may be creating a zone. A plain Dictionary tears its bucket table under
+    ' that race; it does not merely serve stale data.
+    Public spatialZoneDict As New ConcurrentDictionary(Of String, SpatialZone)
 
 
     Public panelData As New PanelDataManager
     Public marginMgr As New Margins.MarginManager()
+
+    ' A margin's position is read on demand and never pushed, so a margin that
+    ' moves leaves every zone bound to it holding a stale rectangle. No reverse
+    ' index: zones are few, a margin move is already an expensive recalculation,
+    ' and an index would be a second ledger to keep true. No zone subscription
+    ' either: a .NET event holds handlers strongly and would keep a zone alive.
+    '
+    ' ThreadStatic because this stops RE-ENTRY on the SAME thread. A shared flag
+    ' would let thread A's refresh block thread B's legitimate one.
+    <ThreadStatic> Private inMarginRefresh As Boolean
+
+    Private Sub OnMarginChanged(marginId As String)
+        If inMarginRefresh Then
+            Console.WriteLine($"[Module1] Margin '{marginId}' moved inside a zone refresh; not recursing.")
+            Return
+        End If
+        inMarginRefresh = True
+        Try
+            ' .Values on a ConcurrentDictionary is already a snapshot.
+            For Each zone In spatialZoneDict.Values
+                If zone.IsBoundToMargin(marginId) Then zone.RefreshLayout()
+            Next
+        Finally
+            inMarginRefresh = False
+        End Try
+    End Sub
 
 
 
@@ -340,6 +371,24 @@ Public Module Module1
         structureDrawState_UCS.TryRemove(structureId, Nothing)
     End Sub
 
+    ' Removes objects AND their ids from structureObjectIDs.
+    ' The zone teardown prunes only objectDictionary,
+    ' so dead ids (would otherwise but for this) pile up in the structure list.
+    Public Sub RemoveObjectIdsFromStructure(structureId As Integer, ids As List(Of Integer))
+        If ids Is Nothing OrElse ids.Count = 0 Then Return
+        Dim doomed As New HashSet(Of Integer)(ids)
+        For Each id In doomed
+            objectDictionary.TryRemove(id, Nothing)
+        Next
+        Dim updated As Boolean = False
+        Do While Not updated
+            Dim currentList As ImmutableList(Of Integer) = Nothing
+            If Not structureObjectIDs.TryGetValue(structureId, currentList) Then Return
+            Dim newList = currentList.RemoveAll(Function(k) doomed.Contains(k))
+            updated = structureObjectIDs.TryUpdate(structureId, newList, currentList)
+        Loop
+    End Sub
+
 
 
 
@@ -458,6 +507,7 @@ Public Module Module1
 
     Sub Main()
 
+        AddHandler marginMgr.MarginChanged, AddressOf OnMarginChanged
 
         CreateDefaultMarginSetsOnce()
 
